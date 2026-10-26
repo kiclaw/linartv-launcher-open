@@ -195,6 +195,62 @@ public final class DashboardActivity extends Activity {
     private CalendarFeed clubTwoCalendar;
     private boolean setupShown;
     private PhotoUploadServer photoUploadServer;
+    // Home Assistant lights (row above the app dock).
+    private static final int LIGHT_ROW_Y = 646, LIGHT_TILE_W = 220, LIGHT_TILE_H = 74, LIGHT_GAP = 28;
+    private static final long LIGHT_POLL_MS = 5_000;
+    private HomeAssistantSetupServer homeAssistantSetupServer;
+    private String haUrl = "";
+    private String haToken = "";
+    private final List<String> haEntities = new ArrayList<>();
+    private final HashMap<String, HomeAssistantClient.Entity> haStates = new HashMap<>();
+    private final java.util.LinkedHashMap<String, LightTile> lightTiles = new java.util.LinkedHashMap<>();
+    private String haError;
+    private boolean haPolling;
+    private int haGeneration;
+    private static final class LightTile {
+        final String id;
+        final FrameLayout card;
+        final ImageView bulb;
+        final TextView name;
+        final TextView state;
+        boolean focused;
+        LightTile(String id, FrameLayout card, ImageView bulb, TextView name, TextView state) {
+            this.id = id;
+            this.card = card;
+            this.bulb = bulb;
+            this.name = name;
+            this.state = state;
+        }
+    }
+    private final Runnable pollLights = new Runnable() {
+        @Override public void run() {
+            handler.removeCallbacks(this);
+            if (!dashboardVisible || !haConfigured()) return;
+            if (!haPolling && !screensaverActive) {
+                haPolling = true;
+                final int generation = haGeneration;
+                final HomeAssistantClient client = new HomeAssistantClient(haUrl, haToken);
+                final List<String> ids = new ArrayList<>(haEntities);
+                new Thread(() -> {
+                    java.util.Map<String, HomeAssistantClient.Entity> result = null;
+                    String error = null;
+                    try { result = client.states(ids); }
+                    catch (HomeAssistantClient.AuthException e) { error = tr("token odrzucony", "token rejected"); }
+                    catch (IOException e) { error = tr("brak połączenia z HA", "no connection to HA"); }
+                    final java.util.Map<String, HomeAssistantClient.Entity> states = result;
+                    final String failure = error;
+                    handler.post(() -> {
+                        haPolling = false;
+                        if (generation != haGeneration) return;
+                        if (states != null) { haStates.putAll(states); haError = null; }
+                        else haError = failure;
+                        paintAllLights();
+                    });
+                }, "home-assistant-poll").start();
+            }
+            handler.postDelayed(this, LIGHT_POLL_MS);
+        }
+    };
     private static final long SCREENSAVER_SLIDE_MS = 30_000L;
     private boolean popupOpen;
     private boolean rebuildAfterPopup;
@@ -295,6 +351,7 @@ public final class DashboardActivity extends Activity {
         crests = new CrestRepository(this, this::updateCrestViews);
         restoreCalendar(clubOneCalendar, saved);
         restoreCalendar(clubTwoCalendar, saved);
+        loadHomeAssistant(saved);
         buildScreen();
         if (!clubOneCalendar.configured()) handler.post(() -> {
             if (!isFinishing() && !setupShown) { firstRunSetup = true; showTeamSetup(); }
@@ -314,6 +371,7 @@ public final class DashboardActivity extends Activity {
         updateTime.run();
         scheduleNextMatchBoundary();
         resetScreensaverTimer();
+        pollLights.run();
     }
 
     @Override protected void onPause() {
@@ -321,6 +379,7 @@ public final class DashboardActivity extends Activity {
         dashboardVisible = false;
         handler.removeCallbacks(updateTime);
         handler.removeCallbacks(updateMatchCards);
+        handler.removeCallbacks(pollLights);
         handler.removeCallbacks(startScreensaver);
         hideScreensaver();
         super.onPause();
@@ -331,6 +390,10 @@ public final class DashboardActivity extends Activity {
         if (photoUploadServer != null) {
             photoUploadServer.close();
             photoUploadServer = null;
+        }
+        if (homeAssistantSetupServer != null) {
+            homeAssistantSetupServer.close();
+            homeAssistantSetupServer = null;
         }
         super.onDestroy();
     }
@@ -666,6 +729,7 @@ public final class DashboardActivity extends Activity {
             renderMatchCard(1114, clubTwoCalendar.club, clubTwoCalendar.league, clubTwoCalendar);
         }
 
+        renderLightRow(singleColumn);
         buildAppDock();
         handler.removeCallbacks(updateTime);
         updateTime.run();
@@ -756,6 +820,10 @@ public final class DashboardActivity extends Activity {
         system.setGravity(Gravity.CENTER);
         system.setOnClickListener(v -> openSettings(Settings.ACTION_SETTINGS));
         addSettingsControl(content, system, 50);
+        TextView homeAssistant = setupButton(tr("Światła · Home Assistant", "Lights · Home Assistant"));
+        homeAssistant.setGravity(Gravity.CENTER);
+        homeAssistant.setOnClickListener(v -> showHomeAssistantSetup());
+        addSettingsControl(content, homeAssistant, 50);
         LinearLayout footer = new LinearLayout(this);
         TextView language = setupButton(tr("Język", "Language"));
         language.setGravity(Gravity.CENTER);
@@ -3516,6 +3584,250 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                  return BitmapFactory.decodeStream(imageStream, null, options);
             } catch (Exception ignored) { }
         return null;
+    }
+
+    // ---- Home Assistant lights ----
+
+    private boolean haConfigured() {
+        return !haUrl.isEmpty() && !haToken.isEmpty() && !haEntities.isEmpty();
+    }
+
+    private void loadHomeAssistant(SharedPreferences saved) {
+        haUrl = saved.getString("ha_url", "");
+        haToken = saved.getString("ha_token", "");
+        haEntities.clear();
+        for (String id : saved.getString("ha_entities", "").split(",")) {
+            String trimmed = id.trim();
+            if (HomeAssistantClient.supported(trimmed) && !haEntities.contains(trimmed)) haEntities.add(trimmed);
+        }
+    }
+
+    private void renderLightRow(boolean singleColumn) {
+        lightTiles.clear();
+        // In single-column mode the right side holds the stacked cards, so the row stays on the left.
+        int span = singleColumn ? SINGLE_COLUMN_X - 56 - 64 : DOCK_SPAN;
+        if (!haConfigured()) {
+            int width = 360;
+            lightSetupTile(56 + (span - width) / 2, width);
+            return;
+        }
+        int fit = Math.max(1, (span + LIGHT_GAP) / (LIGHT_TILE_W + LIGHT_GAP));
+        int count = Math.min(fit, haEntities.size());
+        int total = count * LIGHT_TILE_W + (count - 1) * LIGHT_GAP;
+        int firstX = 56 + (span - total) / 2;
+        for (int i = 0; i < count; i++) lightTile(haEntities.get(i), firstX + i * (LIGHT_TILE_W + LIGHT_GAP));
+    }
+
+    private void lightSetupTile(int x, int width) {
+        View glow = tileGlow(x, LIGHT_ROW_Y, width, LIGHT_TILE_H, 24);
+        TextView card = new TextView(this);
+        card.setText("+  " + tr("Światła z Home Assistanta", "Home Assistant lights"));
+        card.setTextColor(Color.WHITE);
+        card.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(19));
+        card.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        card.setGravity(Gravity.CENTER);
+        card.setSingleLine(true);
+        card.setFocusable(true);
+        card.setFocusableInTouchMode(true);
+        card.setClickable(true);
+        card.setBackground(shape(TILE_BG, 0x66869BBE, 24));
+        card.setOnFocusChangeListener((v, focused) -> {
+            showTileGlow(glow, focused);
+            card.setBackground(shape(focused ? TILE_FOCUS_BG : TILE_BG,
+                    focused ? FOCUS_RING : 0x66869BBE, 24, focused ? 3 : 1));
+        });
+        card.setOnClickListener(v -> showHomeAssistantSetup());
+        place(card, x, LIGHT_ROW_Y, width, LIGHT_TILE_H);
+    }
+
+    private void lightTile(String id, int x) {
+        View glow = tileGlow(x, LIGHT_ROW_Y, LIGHT_TILE_W, LIGHT_TILE_H, 24);
+        FrameLayout card = new FrameLayout(this);
+        card.setFocusable(true);
+        card.setFocusableInTouchMode(true);
+        card.setClickable(true);
+        ImageView bulb = new ImageView(this);
+        bulb.setImageResource(R.drawable.ic_light_bulb);
+        FrameLayout.LayoutParams bulbParams = new FrameLayout.LayoutParams(px(34), px(34),
+                Gravity.CENTER_VERTICAL | Gravity.START);
+        bulbParams.leftMargin = px(18);
+        card.addView(bulb, bulbParams);
+        TextView name = new TextView(this);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(19));
+        name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        name.setSingleLine(true);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        FrameLayout.LayoutParams nameParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
+        nameParams.leftMargin = px(64);
+        nameParams.rightMargin = px(14);
+        nameParams.topMargin = px(11);
+        card.addView(name, nameParams);
+        TextView state = new TextView(this);
+        state.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(15));
+        state.setSingleLine(true);
+        state.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        FrameLayout.LayoutParams stateParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
+        stateParams.leftMargin = px(64);
+        stateParams.rightMargin = px(14);
+        stateParams.topMargin = px(40);
+        card.addView(state, stateParams);
+        place(card, x, LIGHT_ROW_Y, LIGHT_TILE_W, LIGHT_TILE_H);
+        LightTile tile = new LightTile(id, card, bulb, name, state);
+        lightTiles.put(id, tile);
+        card.setOnFocusChangeListener((v, focused) -> {
+            tile.focused = focused;
+            showTileGlow(glow, focused);
+            paintLightTile(tile);
+        });
+        card.setOnClickListener(v -> toggleLight(tile));
+        paintLightTile(tile);
+    }
+
+    private void paintAllLights() {
+        for (LightTile tile : lightTiles.values()) paintLightTile(tile);
+    }
+
+    private void paintLightTile(LightTile tile) {
+        HomeAssistantClient.Entity entity = haStates.get(tile.id);
+        boolean known = entity != null && haError == null;
+        boolean available = known && entity.available();
+        boolean on = available && entity.on();
+        int fill = on ? 0xF0FFD27A : TILE_BG;
+        int textColor = on ? 0xFF15223E : Color.WHITE;
+        tile.card.setBackground(shape(on && tile.focused ? 0xFFFFE2A6 : tile.focused && !on ? TILE_FOCUS_BG : fill,
+                tile.focused ? FOCUS_RING : Color.TRANSPARENT, 24, tile.focused ? 3 : 1));
+        tile.bulb.setColorFilter(textColor);
+        tile.name.setTextColor(textColor);
+        tile.state.setTextColor(on ? 0xCC15223E : 0xCCFFFFFF);
+        String label = entity != null ? entity.name
+                : tile.id.substring(tile.id.indexOf('.') + 1).replace('_', ' ');
+        String status = haError != null ? haError
+                : entity == null ? tr("ładowanie…", "loading…")
+                : !available ? tr("niedostępne", "unavailable")
+                : on ? tr("włączone", "on") : tr("wyłączone", "off");
+        tile.name.setText(label);
+        tile.state.setText(status);
+        tile.card.setAlpha(known && !available ? 0.55f : 1f);
+        tile.card.setContentDescription(label + ", " + status);
+    }
+
+    private void toggleLight(LightTile tile) {
+        if (!haConfigured()) return;
+        HomeAssistantClient.Entity entity = haStates.get(tile.id);
+        haGeneration++;
+        if (entity != null && entity.available() && haError == null) {
+            haStates.put(tile.id, entity.withState(entity.on() ? "off" : "on"));
+            paintLightTile(tile);
+        }
+        final HomeAssistantClient client = new HomeAssistantClient(haUrl, haToken);
+        final String id = tile.id;
+        new Thread(() -> {
+            String error = null;
+            try { client.toggle(id); }
+            catch (HomeAssistantClient.AuthException e) { error = tr("token odrzucony", "token rejected"); }
+            catch (IOException e) { error = tr("brak połączenia z HA", "no connection to HA"); }
+            final String failure = error;
+            handler.post(() -> {
+                if (failure != null) { haError = failure; paintAllLights(); }
+                handler.removeCallbacks(pollLights);
+                handler.postDelayed(pollLights, 700);
+            });
+        }, "home-assistant-toggle").start();
+    }
+
+    private void showHomeAssistantSetup() {
+        String address = PhotoUploadServer.localIpv4();
+        if (address == null) {
+            showMessageDialog("Home Assistant",
+                    tr("Telewizor nie ma adresu w sieci lokalnej. Połącz go i telefon z tą samą siecią.",
+                            "The TV has no local network address. Connect it and your phone to the same network."));
+            return;
+        }
+        if (homeAssistantSetupServer != null) homeAssistantSetupServer.close();
+        TextView status = new TextView(this);
+        final boolean[] changed = {false};
+        HomeAssistantSetupServer server;
+        try {
+            server = new HomeAssistantSetupServer(english, haUrl, haToken, haEntities,
+                    (url, token, entities) -> handler.post(() -> {
+                        haUrl = url;
+                        haToken = token;
+                        haEntities.clear();
+                        haEntities.addAll(entities);
+                        haStates.clear();
+                        haError = null;
+                        haGeneration++;
+                        getPreferences(MODE_PRIVATE).edit()
+                                .putString("ha_url", url)
+                                .putString("ha_token", token)
+                                .putString("ha_entities", android.text.TextUtils.join(",", entities))
+                                .apply();
+                        changed[0] = true;
+                        status.setText(tr("Zapisano " + entities.size() + " świateł. Zamknij to okno.",
+                                "Saved " + entities.size() + " lights. Close this window."));
+                    }));
+        } catch (IOException e) {
+            showMessageDialog("Home Assistant",
+                    tr("Nie udało się uruchomić konfiguracji. Spróbuj ponownie za chwilę.",
+                            "Could not start the setup page. Try again shortly."));
+            return;
+        }
+        homeAssistantSetupServer = server;
+        Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(px(36), px(28), px(36), px(30));
+        content.setBackground(shape(night ? 0xFF142548 : 0xFFF5F2EA,
+                night ? 0xFF899BC6 : 0xFFB7C4D5, 26, 1));
+        detailLine(content, tr("Światła z Home Assistanta", "Home Assistant lights"), 31, true, ink);
+        detailLine(content, tr("Zeskanuj kod telefonem, podaj adres HA i token, a potem wybierz światła.",
+                "Scan the code with your phone, enter the HA address and token, then pick the lights."),
+                18, false, muted);
+        String setupUrl = "http://" + address + ":" + HomeAssistantSetupServer.PORT + "/";
+        try {
+            ImageView qr = new ImageView(this);
+            qr.setImageBitmap(qrBitmap(setupUrl, 350));
+            qr.setBackground(shape(Color.WHITE, Color.TRANSPARENT, 16));
+            qr.setPadding(px(12), px(12), px(12), px(12));
+            LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(px(238), px(238));
+            qrParams.gravity = Gravity.CENTER_HORIZONTAL;
+            qrParams.setMargins(0, px(12), 0, px(12));
+            content.addView(qr, qrParams);
+        } catch (WriterException e) {
+            detailLine(content, tr("Nie udało się przygotować kodu QR.",
+                    "Could not generate the QR code."), 17, false, muted);
+        }
+        detailLine(content, tr("Jeśli skanowanie nie zadziała, wpisz adres:",
+                "If scanning fails, enter this address:"), 16, false, muted);
+        detailLine(content, setupUrl, 19, false, ink);
+        detailLine(content, tr("Kod: ", "Code: ") + server.pin(), 24, true, ink);
+        status.setText(haConfigured()
+                ? tr("Teraz: " + haEntities.size() + " świateł z " + haUrl, "Now: " + haEntities.size() + " lights from " + haUrl)
+                : tr("Home Assistant nie jest jeszcze skonfigurowany.", "Home Assistant is not set up yet."));
+        status.setTextColor(muted);
+        status.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(17));
+        status.setMinHeight(px(55));
+        content.addView(status);
+        TextView close = setupButton(tr("Zamknij", "Close"));
+        close.setGravity(Gravity.CENTER);
+        close.setOnClickListener(v -> dialog.dismiss());
+        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(px(160), px(50));
+        closeParams.gravity = Gravity.END;
+        content.addView(close, closeParams);
+        dialog.setContentView(content);
+        dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        showDialogWithBlur(dialog, () -> {
+            server.close();
+            if (homeAssistantSetupServer == server) homeAssistantSetupServer = null;
+            if (changed[0]) {
+                rebuildAfterPopup = true;
+                handler.removeCallbacks(pollLights);
+                handler.postDelayed(pollLights, 300);
+            }
+        });
+        dialog.getWindow().setLayout(px(720), -2);
+        close.requestFocus();
     }
 
     private void showPhoneUpload() {

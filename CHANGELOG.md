@@ -3,6 +3,22 @@
 Każde wydanie ma tu wpis po polsku i po angielsku. Najnowsze na górze.
 Every release gets an entry here in Polish and English. Newest first.
 
+## 1.1.0 — fork kiclaw / kiclaw fork
+
+**Polski**
+
+Nowe
+- **Światła z Home Assistanta** w rzędzie nad dockiem aplikacji (do 6 kafelków). Kliknięcie pilotem włącza lub wyłącza światło, stan odświeża się co 5 s. Obsługiwane encje `light.*` i `switch.*`.
+- Konfiguracja z telefonu przez kod QR: adres HA, token długoterminowy i wybór świateł (Ustawienia → „Światła · Home Assistant” lub kafelek „+ Światła z Home Assistanta”). Szczegóły: [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md).
+- Automatyczny build podpisanego APK w GitHub Actions i publikacja wydania dla tagów `vX.Y.Z`.
+
+**English**
+
+New
+- **Home Assistant lights** in a row above the app dock (up to 6 tiles). Pressing OK toggles the light; state refreshes every 5 s. Supports `light.*` and `switch.*` entities.
+- Set up from a phone via QR code: HA address, long-lived token and light selection (Settings → "Lights · Home Assistant" or the "+ Home Assistant lights" tile). Details: [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md).
+- GitHub Actions builds a signed APK and publishes a release for `vX.Y.Z` tags.
+
 ## 1.0.1 — niewydane / unreleased
 
 **Polski**
