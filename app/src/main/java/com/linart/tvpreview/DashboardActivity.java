@@ -88,8 +88,8 @@ public final class DashboardActivity extends Activity {
             "com.canal.android.canal", "com.spotify.tv.android", "com.disney.disneyplus", "com.wbd.stream",
             "com.amazon.amazonvideo.livingroom", "com.tvp.vodtv.tv", "com.google.android.youtube.tvkids",
             "pl.cda.tv"};
-    private static final int DOCK_SIZE = 4;
-    private static final int DOCK_TILE_WIDTH = 340, DOCK_GAP = 66;
+    private static final int DOCK_SIZE = 6;
+    private static final int DOCK_TILE_WIDTH = 226, DOCK_GAP = 40;
     private static final int DOCK_SPAN = DOCK_SIZE * DOCK_TILE_WIDTH + (DOCK_SIZE - 1) * DOCK_GAP;
     /** Launchable system entries that are not apps a person would pin to the dock. */
     private static final java.util.Set<String> HIDDEN_APP_PACKAGES = new HashSet<>(java.util.Arrays.asList(
@@ -2489,7 +2489,7 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             dockPackages.clear();
             dockPackages.addAll(resolveDock());
         }
-        // Fewer than four tiles keep their size and spacing and sit centred under the cards.
+        // Fewer than six tiles keep their size and spacing and sit centred under the cards.
         int tiles = Math.max(1, dockPackages.size());
         int firstX = 56 + (DOCK_SPAN - (tiles * DOCK_TILE_WIDTH + (tiles - 1) * DOCK_GAP)) / 2;
         for (int i = 0; i < dockPackages.size(); i++)
@@ -2548,10 +2548,10 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         glow.setBackground(new AppGlowDrawable());
         glow.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         glow.setAlpha(0f);
-        place(glow, x - 24, 743, 388, 164);
+        place(glow, x - 24, 743, DOCK_TILE_WIDTH + 48, 164);
         dockGlows.add(glow);
         FrameLayout card = new FrameLayout(this);
-        place(card, x, 765, 340, 120);
+        place(card, x, 765, DOCK_TILE_WIDTH, 120);
         dockCards.add(card);
         card.setFocusable(true);
         card.setFocusableInTouchMode(true);
@@ -2584,7 +2584,7 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             TextView label = new TextView(this);
             label.setText(pkg == null ? "+  " + brand : brand);
             label.setTextColor(Color.WHITE);
-            label.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(30));
+            label.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(24));
             label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             label.setGravity(Gravity.CENTER);
             card.addView(label, new FrameLayout.LayoutParams(-1, -1));
@@ -2638,7 +2638,7 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         java.util.Iterator<String> spare = candidates.iterator();
         for (int i = 0; i < slots.size(); i++)
             if (slots.get(i) == null) slots.set(i, nextSpareApp(spare, slots));
-        // A saved dock keeps the number of apps the person chose; only the automatic one fills to four.
+        // A saved dock keeps the number of apps the person chose; only the automatic one fills to six.
         if (saved == null) while (slots.size() < DOCK_SIZE) slots.add(nextSpareApp(spare, slots));
         slots.removeIf(java.util.Objects::isNull);
         return slots;
@@ -2788,9 +2788,9 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         LinearLayout content = popupContent();
         popupTitle(content, tr("Twoje aplikacje", "Your apps"));
         popupDescription(content, (firstRun ? tr("Ostatni krok. ", "Last step. ") : "")
-                + tr("Wybierz do 4 aplikacji na dole pulpitu. Numer pokazuje miejsce w docku. "
+                + tr("Wybierz do " + DOCK_SIZE + " aplikacji na dole pulpitu. Numer pokazuje miejsce w docku. "
                         + "Kolejność zmienisz później, przytrzymując OK na kafelku.",
-                "Choose up to 4 apps for the bottom of the home screen. The number shows the dock position. "
+                "Choose up to " + DOCK_SIZE + " apps for the bottom of the home screen. The number shows the dock position. "
                         + "Change the order later by holding OK on a tile."));
         TextView status = new TextView(this);
         status.setTextColor(night ? 0xFFFFB8BE : 0xFFA12636);
@@ -2882,8 +2882,8 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                 status.setText("");
                 if (picked.remove(pkg)) { paint.run(); return; }
                 if (picked.size() >= DOCK_SIZE) {
-                    status.setText(tr("Dock mieści 4 aplikacje. Odznacz jedną, aby wybrać inną.",
-                            "The dock holds 4 apps. Deselect one to choose another."));
+                    status.setText(tr("Dock mieści " + DOCK_SIZE + " aplikacji. Odznacz jedną, aby wybrać inną.",
+                            "The dock holds " + DOCK_SIZE + " apps. Deselect one to choose another."));
                     return;
                 }
                 picked.add(pkg);
@@ -2965,7 +2965,7 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             glow.setBackground(new AppGlowDrawable());
             glow.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
             glow.setAlpha(0f);
-            FrameLayout.LayoutParams glowParams = new FrameLayout.LayoutParams(px(388), px(164));
+            FrameLayout.LayoutParams glowParams = new FrameLayout.LayoutParams(px(DOCK_TILE_WIDTH + 48), px(164));
             glowParams.leftMargin = -px(4);
             glowParams.topMargin = -px(11);
             wrapper.addView(glow, glowParams);
@@ -2996,18 +2996,18 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                 TextView label = new TextView(this);
                 label.setText(brand);
                 label.setTextColor(Color.WHITE);
-                label.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(30));
+                label.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(24));
                 label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
                 label.setGravity(Gravity.CENTER);
                 tile.addView(label, new FrameLayout.LayoutParams(-1, -1));
             }
             tile.setOnClickListener(v -> launch(pkg));
-            FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(px(340), px(120));
+            FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(px(DOCK_TILE_WIDTH), px(120));
             cardParams.leftMargin = px(20);
             cardParams.topMargin = px(11);
             wrapper.addView(tile, cardParams);
-            LinearLayout.LayoutParams itemParams = new LinearLayout.LayoutParams(px(380), px(APP_ROW_HEIGHT));
-            if (i < brands.length - 1) itemParams.rightMargin = px(26);
+            LinearLayout.LayoutParams itemParams = new LinearLayout.LayoutParams(px(DOCK_TILE_WIDTH + 40), px(APP_ROW_HEIGHT));
+            if (i < brands.length - 1) itemParams.rightMargin = px(DOCK_GAP - 40);
             row.addView(wrapper, itemParams);
             base.add(tile);
         }
@@ -3044,8 +3044,8 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         for (int i = 0; i < ordered.size(); i++) {
             ResolveInfo info = ordered.get(i);
             String pkg = info.activityInfo.packageName;
-            int drawerRow = 1 + i / 4, drawerColumn = i % 4;
-            if (i % 4 == 0) {
+            int drawerRow = 1 + i / DOCK_SIZE, drawerColumn = i % DOCK_SIZE;
+            if (i % DOCK_SIZE == 0) {
                 row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setClipChildren(false);
@@ -3059,7 +3059,7 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             glow.setBackground(new AppGlowDrawable());
             glow.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
             glow.setAlpha(0f);
-            FrameLayout.LayoutParams glowParams = new FrameLayout.LayoutParams(px(388), px(164));
+            FrameLayout.LayoutParams glowParams = new FrameLayout.LayoutParams(px(DOCK_TILE_WIDTH + 48), px(164));
             glowParams.leftMargin = -px(4);
             glowParams.topMargin = -px(11);
             wrapper.addView(glow, glowParams);
@@ -3092,14 +3092,14 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                 start.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
                 startActivity(start);
             });
-            FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(px(340), px(120));
+            FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(px(DOCK_TILE_WIDTH), px(120));
             cardParams.leftMargin = px(20);
             cardParams.topMargin = px(11);
             wrapper.addView(tile, cardParams);
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(px(380), px(APP_ROW_HEIGHT));
-            if (i % 4 != 3) params.rightMargin = px(26);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(px(DOCK_TILE_WIDTH + 40), px(APP_ROW_HEIGHT));
+            if (i % DOCK_SIZE != DOCK_SIZE - 1) params.rightMargin = px(DOCK_GAP - 40);
             row.addView(wrapper, params);
-            extraAppRows.get(1 + i / 4).add(tile);
+            extraAppRows.get(1 + i / DOCK_SIZE).add(tile);
             if (firstExtraApp == null) firstExtraApp = tile;
         }
         if (firstExtraApp == null) {

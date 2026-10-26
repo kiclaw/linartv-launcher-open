@@ -122,9 +122,15 @@ final class HomeAssistantSetupServer implements AutoCloseable {
         if (connect) {
             try {
                 JSONArray list = new JSONArray();
-                for (HomeAssistantClient.Entity entity : client.controllable()) {
-                    list.put(new JSONObject().put("id", entity.id).put("name", entity.name)
-                            .put("state", entity.state));
+                List<HomeAssistantClient.Entity> entities = client.controllable();
+                // Lights first, then switches; unavailable entities only when already chosen.
+                for (String domain : new String[]{"light.", "switch."}) {
+                    for (HomeAssistantClient.Entity entity : entities) {
+                        if (!entity.id.startsWith(domain)) continue;
+                        if (!entity.available() && !savedEntities.contains(entity.id)) continue;
+                        list.put(new JSONObject().put("id", entity.id).put("name", entity.name)
+                                .put("state", entity.state));
+                    }
                 }
                 JSONObject answer = new JSONObject().put("entities", list)
                         .put("selected", new JSONArray(savedEntities));
