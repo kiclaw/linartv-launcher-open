@@ -26,3 +26,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Calendar scope checks failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Compilation of crest checks failed.' }
 & $runtime -cp $outputPath com.linart.tvpreview.CrestNameIndexCheck
 if ($LASTEXITCODE -ne 0) { throw 'Crest checks failed.' }
+& $compiler -encoding UTF-8 -d $outputPath (Join-Path $projectRoot 'app\src\main\java\com\linart\tvpreview\PortfolioPhotos.java') (Join-Path $projectRoot 'tests\PortfolioPhotosCheck.java')
+if ($LASTEXITCODE -ne 0) { throw 'Compilation of portfolio checks failed.' }
+& $runtime -cp $outputPath com.linart.tvpreview.PortfolioPhotosCheck
+if ($LASTEXITCODE -ne 0) { throw 'Portfolio checks failed.' }

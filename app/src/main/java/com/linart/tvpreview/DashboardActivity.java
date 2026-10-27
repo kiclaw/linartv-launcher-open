@@ -298,6 +298,7 @@ public final class DashboardActivity extends Activity {
                 return;
             }
             refreshRocketCard();
+            refreshPortfolioIfDue(false);
             refreshWeather();
             refreshCalendar(clubOneCalendar);
             refreshCalendar(clubTwoCalendar);
@@ -354,6 +355,7 @@ public final class DashboardActivity extends Activity {
         restoreCalendar(clubTwoCalendar, saved);
         loadHomeAssistant(saved);
         restoreLaunches(saved);
+        restorePortfolio(saved);
         buildScreen();
         if (!clubOneCalendar.configured()) handler.post(() -> {
             if (!isFinishing() && !setupShown) { firstRunSetup = true; showTeamSetup(); }
@@ -725,6 +727,7 @@ public final class DashboardActivity extends Activity {
         designCircleAction(R.drawable.ic_ds_input, tr("Źródła", "Inputs"), 1652, this::showSources);
         designCircleAction(R.drawable.ic_ds_settings, tr("Ustawienia", "Settings"), 1748,
                 this::showPublicSettings);
+        renderPhotosButton();
         renderDesignWeather(712, 64, 788, 208);
         renderDesignEvents();
         renderLightRow();
@@ -1437,6 +1440,322 @@ public final class DashboardActivity extends Activity {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
         params.bottomMargin = px(8);
         rows.addView(row, params);
+    }
+
+
+    // ---------- Photo viewer: JUR / URBANOWICZ (friends' portfolios) ----------
+
+    private static final long PORTFOLIO_REFRESH_MS = 7L * 24 * 60 * 60 * 1000;
+    private static final long PORTFOLIO_RETRY_MS = 60L * 60 * 1000;
+    private static final long PHOTO_SLIDE_MS = 10_000L;
+    private final List<PortfolioPhotos.Photo> portfolioPhotos = new ArrayList<>();
+    private long portfolioUpdatedAt, portfolioAttemptedAt;
+    private boolean portfolioLoading;
+    private final java.util.Random photoRandom = new java.util.Random();
+    /** The open viewer, or null. */
+    private PhotoViewer photoViewer;
+
+    private void restorePortfolio(SharedPreferences saved) {
+        portfolioPhotos.clear();
+        portfolioUpdatedAt = saved.getLong("portfolio_updated", 0);
+        try {
+            JSONArray items = new JSONArray(saved.getString("portfolio_json", "[]"));
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.getJSONObject(i);
+                portfolioPhotos.add(new PortfolioPhotos.Photo(item.getString("u"), item.optString("a"), item.optString("g")));
+            }
+        } catch (Exception ignored) { portfolioPhotos.clear(); }
+    }
+
+    private void savePortfolio() {
+        JSONArray items = new JSONArray();
+        try {
+            for (PortfolioPhotos.Photo photo : portfolioPhotos)
+                items.put(new JSONObject().put("u", photo.url).put("a", photo.author).put("g", photo.gallery));
+        } catch (Exception ignored) { return; }
+        getPreferences(MODE_PRIVATE).edit().putString("portfolio_json", items.toString())
+                .putLong("portfolio_updated", portfolioUpdatedAt).apply();
+    }
+
+    /** The photo list changes rarely: refresh it once a week (retry hourly after a failure). */
+    private void refreshPortfolioIfDue(boolean force) {
+        long now = System.currentTimeMillis();
+        if (portfolioLoading) return;
+        if (!force && now - portfolioUpdatedAt < PORTFOLIO_REFRESH_MS) return;
+        if (!force && now - portfolioAttemptedAt < PORTFOLIO_RETRY_MS) return;
+        portfolioAttemptedAt = now;
+        portfolioLoading = true;
+        new Thread(() -> {
+            List<PortfolioPhotos.Photo> found = null;
+            try { found = PortfolioPhotos.fetchAll(); } catch (IOException ignored) { }
+            final List<PortfolioPhotos.Photo> result = found;
+            handler.post(() -> {
+                portfolioLoading = false;
+                if (result != null && !result.isEmpty()) {
+                    portfolioPhotos.clear();
+                    portfolioPhotos.addAll(result);
+                    portfolioUpdatedAt = System.currentTimeMillis();
+                    savePortfolio();
+                }
+                if (photoViewer != null) photoViewer.listChanged();
+            });
+        }, "portfolio-list").start();
+    }
+
+    /** Header button under the system icons, as wide as their three columns. */
+    private void renderPhotosButton() {
+        float x = 1556, y = 168, w = 268, h = 76;
+        View aura = dFocusAura(x, y, w, h, 38);
+        FrameLayout button = dCard(x, y, w, h, 38);
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.logo_jurbanowicz);
+        logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        logo.setColorFilter(D_INK);
+        logo.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        addD(button, logo, 34, 18, w - 68, 40);
+        button.setContentDescription(tr("Zdjęcia: Janusz Jurek i Marcin Urbanowicz",
+                "Photos: Janusz Jurek and Marcin Urbanowicz"));
+        dFocusable(button, aura, null);
+        button.setOnClickListener(v -> showPhotoViewer());
+    }
+
+    private void showPhotoViewer() {
+        if (photoViewer != null) return;
+        photoViewer = new PhotoViewer();
+        photoViewer.show();
+        if (portfolioPhotos.isEmpty()) refreshPortfolioIfDue(true);
+    }
+
+    /** Full-screen random slideshow: ◀ ▶ browse (with history), OK = next, Back closes. */
+    private final class PhotoViewer {
+        private final Dialog dialog = new Dialog(DashboardActivity.this,
+                android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        private final FrameLayout stage = new FrameLayout(DashboardActivity.this);
+        private final ImageView image = new ImageView(DashboardActivity.this);
+        private final TextView author, gallery, status;
+        private final View leftArrow, rightArrow;
+        private final List<PortfolioPhotos.Photo> history = new ArrayList<>();
+        private final java.util.ArrayDeque<String> recent = new java.util.ArrayDeque<>();
+        private int position = -1;
+        private int generation;
+        private PortfolioPhotos.Photo prefetchPhoto;
+        private Bitmap prefetchBitmap;
+        private boolean prefetching;
+        private boolean closed;
+        private final Runnable advance = () -> step(1);
+
+        PhotoViewer() {
+            stage.setBackgroundColor(0xFF020409);
+            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            stage.addView(image, new FrameLayout.LayoutParams(-1, -1));
+            View shade = new View(DashboardActivity.this);
+            shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
+                    new int[]{0xB3020409, 0x00020409}));
+            stage.addView(shade, paramsD(0, 820, 1920, 260));
+            author = addText(26, 700, D_INK, 96, 958, 1100, 40);
+            gallery = addText(20, 600, inkAlpha(0.72f), 96, 1000, 1100, 32);
+            status = addText(24, 600, inkAlpha(0.8f), 0, 520, 1920, 40);
+            status.setGravity(Gravity.CENTER);
+            ImageView mark = new ImageView(DashboardActivity.this);
+            mark.setImageResource(R.drawable.logo_jurbanowicz);
+            mark.setScaleType(ImageView.ScaleType.FIT_END);
+            mark.setColorFilter(inkAlpha(0.55f));
+            stage.addView(mark, paramsD(1920 - 96 - 220, 976, 220, 44));
+            leftArrow = arrow(48, 90f, () -> step(-1));
+            rightArrow = arrow(1920 - 48 - 88, -90f, () -> step(1));
+            leftArrow.setContentDescription(tr("Poprzednie zdjęcie", "Previous photo"));
+            rightArrow.setContentDescription(tr("Następne zdjęcie", "Next photo"));
+            dialog.setContentView(stage);
+            dialog.setOnKeyListener((d, key, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (key == KeyEvent.KEYCODE_DPAD_LEFT) { pulse(leftArrow); step(-1); return true; }
+                if (key == KeyEvent.KEYCODE_DPAD_RIGHT || key == KeyEvent.KEYCODE_DPAD_CENTER
+                        || key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+                    pulse(rightArrow); step(1); return true;
+                }
+                if (key == KeyEvent.KEYCODE_DPAD_UP || key == KeyEvent.KEYCODE_DPAD_DOWN) return true;
+                return false; // Back closes the dialog
+            });
+        }
+
+        private TextView addText(float size, int weight, int color, float x, float y, float w, float h) {
+            TextView view = new TextView(DashboardActivity.this);
+            view.setTextColor(color);
+            view.setTextSize(TypedValue.COMPLEX_UNIT_PX, pxD(size));
+            view.setTypeface(manrope(weight));
+            view.setIncludeFontPadding(false);
+            view.setSingleLine(true);
+            view.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            view.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            stage.addView(view, paramsD(x, y, w, h));
+            return view;
+        }
+
+        private View arrow(float x, float rotation, Runnable click) {
+            FrameLayout button = new FrameLayout(DashboardActivity.this);
+            GradientDrawable circle = glass(-1);
+            circle.setColor(0x990E1630);
+            button.setBackground(circle);
+            ImageView chevron = new ImageView(DashboardActivity.this);
+            chevron.setImageResource(R.drawable.ic_ds_chevron);
+            chevron.setColorFilter(D_INK);
+            chevron.setRotation(rotation);
+            button.addView(chevron, paramsD(24, 24, 40, 40));
+            button.setClickable(true);
+            button.setOnClickListener(v -> { pulse(v); click.run(); });
+            stage.addView(button, paramsD(x, 540 - 44, 88, 88));
+            return button;
+        }
+
+        private void pulse(View view) {
+            view.animate().cancel();
+            view.setScaleX(1.15f);
+            view.setScaleY(1.15f);
+            view.setAlpha(1f);
+            view.animate().scaleX(1f).scaleY(1f).setDuration(260).start();
+        }
+
+        void show() {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.black);
+            showDialogWithBlur(dialog, this::close);
+            dialog.getWindow().setLayout(-1, -1);
+            listChanged();
+        }
+
+        private void close() {
+            closed = true;
+            handler.removeCallbacks(advance);
+            image.setImageDrawable(null);
+            prefetchBitmap = null;
+            history.clear();
+            if (photoViewer == this) photoViewer = null;
+        }
+
+        /** Called when the photo list arrives or changes. */
+        void listChanged() {
+            if (closed) return;
+            if (position < 0) {
+                if (portfolioPhotos.isEmpty()) {
+                    status.setText(portfolioLoading ? tr("Pobieranie listy zdjęć…", "Loading the photo list…")
+                            : tr("Nie udało się pobrać zdjęć. Sprawdź internet.", "Could not load photos. Check the internet."));
+                    status.setVisibility(View.VISIBLE);
+                    return;
+                }
+                step(1);
+            }
+        }
+
+        /** Half of the picks come from each author, so the smaller portfolio is not drowned out. */
+        private PortfolioPhotos.Photo pick() {
+            if (portfolioPhotos.isEmpty()) return null;
+            List<String> authors = new ArrayList<>();
+            for (PortfolioPhotos.Photo photo : portfolioPhotos)
+                if (!authors.contains(photo.author)) authors.add(photo.author);
+            String author = authors.get(photoRandom.nextInt(authors.size()));
+            List<PortfolioPhotos.Photo> pool = new ArrayList<>();
+            for (PortfolioPhotos.Photo photo : portfolioPhotos)
+                if (photo.author.equals(author) && !recent.contains(photo.url)) pool.add(photo);
+            if (pool.isEmpty()) for (PortfolioPhotos.Photo photo : portfolioPhotos)
+                if (photo.author.equals(author)) pool.add(photo);
+            PortfolioPhotos.Photo chosen = pool.get(photoRandom.nextInt(pool.size()));
+            recent.addLast(chosen.url);
+            while (recent.size() > Math.min(60, portfolioPhotos.size() / 2)) recent.removeFirst();
+            return chosen;
+        }
+
+        private void step(int delta) {
+            if (closed) return;
+            handler.removeCallbacks(advance);
+            if (delta < 0) {
+                if (position <= 0) { handler.postDelayed(advance, PHOTO_SLIDE_MS); return; }
+                position--;
+                display(history.get(position), null);
+                return;
+            }
+            if (position + 1 < history.size()) {
+                position++;
+                display(history.get(position), null);
+                return;
+            }
+            PortfolioPhotos.Photo next;
+            Bitmap ready = null;
+            if (prefetchPhoto != null && !prefetching) {
+                next = prefetchPhoto;
+                ready = prefetchBitmap;
+                prefetchPhoto = null;
+                prefetchBitmap = null;
+            } else next = pick();
+            if (next == null) { listChanged(); return; }
+            history.add(next);
+            while (history.size() > 50) history.remove(0);
+            position = history.size() - 1;
+            display(next, ready);
+        }
+
+        private void display(PortfolioPhotos.Photo photo, Bitmap ready) {
+            final int current = ++generation;
+            author.setText(photo.author);
+            gallery.setText(photo.gallery);
+            leftArrow.setAlpha(position > 0 ? 1f : 0.35f);
+            if (ready != null) { showBitmap(ready); return; }
+            status.setText(tr("Wczytywanie zdjęcia…", "Loading photo…"));
+            status.setVisibility(View.VISIBLE);
+            loadPhoto(photo, bitmap -> {
+                if (closed || current != generation) return;
+                if (bitmap == null) {
+                    status.setText(tr("Nie udało się wczytać zdjęcia", "Could not load the photo"));
+                    status.setVisibility(View.VISIBLE);
+                    handler.postDelayed(advance, 2500);
+                    return;
+                }
+                showBitmap(bitmap);
+            });
+        }
+
+        private void showBitmap(Bitmap bitmap) {
+            status.setVisibility(View.GONE);
+            image.setAlpha(0f);
+            image.setImageBitmap(bitmap);
+            image.animate().alpha(1f).setDuration(450).start();
+            handler.postDelayed(advance, PHOTO_SLIDE_MS);
+            prefetch();
+        }
+
+        private void prefetch() {
+            if (prefetching || prefetchPhoto != null || position + 1 < history.size()) return;
+            PortfolioPhotos.Photo next = pick();
+            if (next == null) return;
+            prefetchPhoto = next;
+            prefetching = true;
+            loadPhoto(next, bitmap -> {
+                prefetching = false;
+                if (closed) return;
+                if (bitmap == null) prefetchPhoto = null;
+                else prefetchBitmap = bitmap;
+            });
+        }
+
+        private void loadPhoto(PortfolioPhotos.Photo photo, java.util.function.Consumer<Bitmap> done) {
+            final int maxW = Math.max(640, getResources().getDisplayMetrics().widthPixels);
+            final int maxH = Math.max(360, getResources().getDisplayMetrics().heightPixels);
+            new Thread(() -> {
+                Bitmap bitmap = null;
+                try {
+                    byte[] data = PortfolioPhotos.download(photo.url, 25_000_000);
+                    BitmapFactory.Options bounds = new BitmapFactory.Options();
+                    bounds.inJustDecodeBounds = true;
+                    BitmapFactory.decodeByteArray(data, 0, data.length, bounds);
+                    BitmapFactory.Options options = new BitmapFactory.Options();
+                    options.inPreferredConfig = Bitmap.Config.RGB_565;
+                    options.inSampleSize = 1;
+                    while (bounds.outWidth / (options.inSampleSize * 2) >= maxW
+                            || bounds.outHeight / (options.inSampleSize * 2) >= maxH) options.inSampleSize *= 2;
+                    bitmap = BitmapFactory.decodeByteArray(data, 0, data.length, options);
+                } catch (Exception | OutOfMemoryError ignored) { bitmap = null; }
+                final Bitmap result = bitmap;
+                handler.post(() -> done.accept(result));
+            }, "portfolio-photo").start();
+        }
     }
 
     private void showPublicSettings() {
@@ -2280,10 +2599,10 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
     }
 
     private void renderSpotifyBar() {
-        // Now playing sits under the system buttons, in the header's free corner.
-        float x = 1556, y = 168, w = 268, h = 76;
-        View aura = dFocusAura(x, y, w, h, 38);
-        spotifyBar = dCard(x, y, w, h, 38);
+        // Now playing takes the date's place under the clock while music plays.
+        float x = 96, y = 212, w = 560, h = 64;
+        View aura = dFocusAura(x, y, w, h, 32);
+        spotifyBar = dCard(x, y, w, h, 32);
         spotifyBar.setOnClickListener(v -> launch("com.spotify.tv.android"));
         dFocusable(spotifyBar, aura, null);
         spotifyCover = new ImageView(this);
@@ -2294,9 +2613,9 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         spotifyCover.setBackground(coverShape);
         spotifyCover.setOutlineProvider(clipOutline(-1));
         spotifyCover.setClipToOutline(true);
-        addD(spotifyBar, spotifyCover, 10, 10, 56, 56);
-        spotifyTitle = new NowPlayingTicker(this, pxD(20), D_INK);
-        addD(spotifyBar, spotifyTitle, 78, 0, w - 78 - 18, h);
+        addD(spotifyBar, spotifyCover, 8, 8, 48, 48);
+        spotifyTitle = new NowPlayingTicker(this, pxD(22), D_INK);
+        addD(spotifyBar, spotifyTitle, 70, 0, w - 70 - 22, h);
         updateSpotifyBar();
     }
 
@@ -2308,6 +2627,7 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             else root.requestFocus();
         }
         spotifyBar.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (date != null) date.setVisibility(visible ? View.INVISIBLE : View.VISIBLE);
         if (!visible) return;
         spotifyTitle.setSong(spotifyPerformer, spotifyTrack);
         spotifyCover.setImageBitmap(spotifyArtwork);

@@ -3,6 +3,24 @@
 Każde wydanie ma tu wpis po polsku i po angielsku. Najnowsze na górze.
 Every release gets an entry here in Polish and English. Newest first.
 
+## 1.3.0 — zdjęcia / photos
+
+**Polski**
+
+Nowe
+- **Przycisk „JUR / URBANOWICZ”** pod przyciskami systemowymi otwiera pełnoekranowy pokaz losowych zdjęć z portfolio Janusza Jurka (Adobe Portfolio, wszystkie galerie) i Marcina Urbanowicza (Reportaż). Połowa zdjęć pochodzi od każdego autora.
+- Strzałki ◀ ▶ (i na pilocie) przechodzą między zdjęciami, także wstecz po historii; OK = następne, Wstecz zamyka. Bez dotykania pilota zdjęcie zmienia się co 10 s. Na dole autor i galeria.
+- Lista zdjęć odświeża się raz w tygodniu i jest zapamiętywana; kolejne zdjęcie wczytuje się w tle.
+- Odtwarzana muzyka ze Spotify pokazuje się w miejscu daty pod zegarem.
+
+**English**
+
+New
+- **"JUR / URBANOWICZ" button** under the system buttons opens a full-screen slideshow of random photos from Janusz Jurek's portfolio (Adobe Portfolio, all galleries) and Marcin Urbanowicz's (Reportaż). Half of the photos come from each author.
+- ◀ ▶ arrows (also on the remote) move between photos, including back through the history; OK = next, Back closes. Without input the photo changes every 10 s. Author and gallery are shown at the bottom.
+- The photo list refreshes once a week and is remembered; the next photo loads in the background.
+- Spotify now playing replaces the date under the clock.
+
 ## 1.2.0 — nowy wygląd / new look
 
 **Polski**
