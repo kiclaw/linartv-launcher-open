@@ -3,6 +3,14 @@
 Każde wydanie ma tu wpis po polsku i po angielsku. Najnowsze na górze.
 Every release gets an entry here in Polish and English. Newest first.
 
+## 1.3.3 — rozmycie wypiekane / baked blur
+
+**Polski**
+- Rozmyte tło każdej karty jest raz „wypiekane” do obrazka w jej kształcie, zamiast rysowania przez GPU przy każdej klatce (na MiBoxie to drugie nie działało i karty były zwykle przezroczyste).
+
+**English**
+- Each card's blurred background is baked once into a bitmap of its shape instead of being drawn by the GPU every frame (that did not render on the Mi Box, leaving cards plain transparent).
+
 ## 1.3.2 — poprawki szkła / glass fixes
 
 **Polski**

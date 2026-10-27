@@ -212,6 +212,7 @@ public final class DashboardActivity extends Activity {
         final TextView name;
         final TextView state;
         final View iconCircle;
+        Drawable glass;
         boolean focused;
         LightTile(String id, FrameLayout card, ImageView bulb, TextView name, TextView state, View iconCircle) {
             this.id = id;
@@ -714,7 +715,6 @@ public final class DashboardActivity extends Activity {
         root.addView(wallpaper, new FrameLayout.LayoutParams(-1, -1));
 
         // The design's own background is already darkened; photos keep the readability veil.
-        glassHosts.clear();
         int veilColor = "cosmos".equals(selectedWallpaper()) ? 0 : 0x660A1036;
         if (veilColor != 0) {
             View veil = new View(this);
@@ -855,10 +855,9 @@ public final class DashboardActivity extends Activity {
 
     private FrameLayout dCard(float x, float y, float w, float h, float radius) {
         RoundClipFrame card = new RoundClipFrame(radius);
-        card.setBackground(new BackdropGlass(card, radius, D_GLASS, D_GLASS_BORDER));
+        card.setBackground(glassBackground(bakedGlass(x, y, w, h, radius), radius, D_GLASS, D_GLASS_BORDER, null));
         // No clipToOutline: GPU outline clipping is not anti-aliased and showed steps on curves.
         card.setOutlineProvider(clipOutline(radius));
-        glassHosts.add(card);
         return placeD(card, x, y, w, h);
     }
 
@@ -870,7 +869,6 @@ public final class DashboardActivity extends Activity {
     private static final int BACKDROP_SCALE = 4, BACKDROP_RADIUS = 4;
     private Bitmap backdropBlur;
     private int backdropScreenW = 1, backdropScreenH = 1;
-    private final List<View> glassHosts = new ArrayList<>();
     private static final android.graphics.ColorMatrixColorFilter BACKDROP_SATURATE;
     static {
         android.graphics.ColorMatrix saturate = new android.graphics.ColorMatrix();
@@ -914,50 +912,42 @@ public final class DashboardActivity extends Activity {
         backdropBlur = small;
     }
 
-    /** Glass: the blurred wallpaper under the card, a translucent tint and a hairline border. */
-    private final class BackdropGlass extends Drawable {
-        private final View host;
-        private final float radius;
-        private final int tint, border;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-        private final android.graphics.Matrix matrix = new android.graphics.Matrix();
+    /**
+     * The blurred wallpaper exactly under a card (design coordinates), baked once into a
+     * card-sized bitmap with anti-aliased rounded corners. Drawn as a plain bitmap afterwards,
+     * so it looks the same on every frame, focused or not.
+     */
+    private Drawable bakedGlass(float x, float y, float w, float h, float radius) {
+        Bitmap blur = backdropBlur;
+        int pw = pxD(w), ph = pxD(h);
+        if (blur == null || blur.isRecycled() || pw <= 0 || ph <= 0) return null;
+        Bitmap out = Bitmap.createBitmap(pw, ph, Bitmap.Config.ARGB_8888);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        android.graphics.BitmapShader shader = new android.graphics.BitmapShader(blur,
+                android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP);
+        android.graphics.Matrix matrix = new android.graphics.Matrix();
+        matrix.setScale(backdropScreenW / (float) blur.getWidth(), backdropScreenH / (float) blur.getHeight());
+        matrix.postTranslate(-pxD(x), -pxD(y));
+        shader.setLocalMatrix(matrix);
+        paint.setShader(shader);
+        paint.setColorFilter(BACKDROP_SATURATE);
+        float corner = radius < 0 ? Math.min(pw, ph) / 2f : pxD(radius);
+        new Canvas(out).drawRoundRect(new RectF(0, 0, pw, ph), corner, corner, paint);
+        return new android.graphics.drawable.BitmapDrawable(getResources(), out);
+    }
 
-        BackdropGlass(View host, float radius, int tint, int border) {
-            this.host = host; this.radius = radius; this.tint = tint; this.border = border;
-        }
-
-        @Override public void draw(Canvas canvas) {
-            RectF r = new RectF(getBounds());
-            float corner = radius < 0 ? Math.min(r.width(), r.height()) / 2f : pxD(radius);
-            Bitmap blur = backdropBlur;
-            paint.setStyle(Paint.Style.FILL);
-            if (blur != null && !blur.isRecycled()) {
-                android.graphics.BitmapShader shader = new android.graphics.BitmapShader(blur,
-                        android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP);
-                matrix.setScale(backdropScreenW / (float) blur.getWidth(), backdropScreenH / (float) blur.getHeight());
-                matrix.postTranslate(-host.getLeft(), -host.getTop());
-                shader.setLocalMatrix(matrix);
-                paint.setShader(shader);
-                paint.setColorFilter(BACKDROP_SATURATE);
-                canvas.drawRoundRect(r, corner, corner, paint);
-                paint.setShader(null);
-                paint.setColorFilter(null);
-                paint.setColor(tint);
-            } else paint.setColor(withAlpha(tint, Math.min(1f, (tint >>> 24) / 255f + 0.2f)));
-            canvas.drawRoundRect(r, corner, corner, paint);
-            if (border != 0) {
-                float stroke = Math.max(1, pxD(1));
-                paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth(stroke);
-                paint.setColor(border);
-                r.inset(stroke / 2f, stroke / 2f);
-                canvas.drawRoundRect(r, Math.max(0, corner - stroke / 2f), Math.max(0, corner - stroke / 2f), paint);
-                paint.setStyle(Paint.Style.FILL);
-            }
-        }
-        @Override public void setAlpha(int alpha) { }
-        @Override public void setColorFilter(android.graphics.ColorFilter filter) { }
-        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    /** Blurred backdrop + translucent tint with hairline border (+ optional overlay, e.g. amber "on"). */
+    private Drawable glassBackground(Drawable baked, float radius, int tint, int border, Drawable overlay) {
+        GradientDrawable fill = new GradientDrawable();
+        if (radius < 0) fill.setShape(GradientDrawable.OVAL);
+        else fill.setCornerRadius(pxD(radius));
+        fill.setColor(baked != null ? tint : withAlpha(tint, Math.min(1f, (tint >>> 24) / 255f + 0.2f)));
+        if (border != 0) fill.setStroke(Math.max(1, pxD(1)), border);
+        List<Drawable> layers = new ArrayList<>();
+        if (baked != null) layers.add(baked);
+        layers.add(fill);
+        if (overlay != null) layers.add(overlay);
+        return layers.size() == 1 ? fill : new android.graphics.drawable.LayerDrawable(layers.toArray(new Drawable[0]));
     }
 
     /**
@@ -3525,9 +3515,9 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         dockExpand.setColorFilter(inkAlpha(0.8f));
         dockExpand.setContentDescription(tr("Więcej aplikacji — strzałka w dół", "More apps — press down"));
         dockExpand.setPadding(pxD(8), pxD(8), pxD(8), pxD(8));
-        dockExpand.setBackground(new BackdropGlass(dockExpand, -1, D_GLASS, D_GLASS_BORDER));
+        dockExpand.setBackground(glassBackground(bakedGlass(expandX, expandY, 36, 36, -1), -1,
+                D_GLASS, D_GLASS_BORDER, null));
         dockExpand.setOutlineProvider(clipOutline(-1));
-        glassHosts.add(dockExpand);
         placeD(dockExpand, expandX, expandY, 36, 36);
         dFocusable(dockExpand, expandAura, null);
         dockExpand.setOnClickListener(v -> openAppDrawer());
@@ -4719,6 +4709,7 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         TextView name = dText(card, "", 22, 700, D_INK, 92, 18, w - 92 - 22, 32);
         TextView state = dText(card, "", 17, 600, inkAlpha(0.62f), 92, 52, w - 92 - 22, 24);
         LightTile tile = new LightTile(id, card, bulb, name, state, circle);
+        tile.glass = bakedGlass(x, D_LIGHTS_Y, w, D_LIGHT_H, 48);
         lightTiles.put(id, tile);
         dFocusable(card, aura, focused -> tile.focused = focused);
         card.setOnClickListener(v -> toggleLight(tile));
@@ -4739,9 +4730,8 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                     new int[]{0x47FFBE64, 0x1FFF9646});
             amber.setCornerRadius(pxD(48));
             amber.setStroke(Math.max(1, pxD(1)), 0x73FFCD82);
-            tile.card.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{
-                    new BackdropGlass(tile.card, 48, D_GLASS, 0), amber}));
-        } else tile.card.setBackground(new BackdropGlass(tile.card, 48, D_GLASS, D_GLASS_BORDER));
+            tile.card.setBackground(glassBackground(tile.glass, 48, D_GLASS, 0, amber));
+        } else tile.card.setBackground(glassBackground(tile.glass, 48, D_GLASS, D_GLASS_BORDER, null));
         GradientDrawable circle = new GradientDrawable();
         circle.setShape(GradientDrawable.OVAL);
         circle.setColor(on ? 0x38FFC86E : 0x12FFFFFF);
