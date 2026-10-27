@@ -74,23 +74,17 @@ import com.google.zxing.qrcode.QRCodeWriter;
 public final class DashboardActivity extends Activity {
     private static final int W = 1672;
     private static final int H = 941;
-    private static final int DASHBOARD_CARD_Y = 328;
-    private static final int SINGLE_COLUMN_X = 1114;
-    private static final int SINGLE_WEATHER_Y = 145;
-    private static final int SINGLE_MATCH_Y = 445;
     private static final Locale PL = new Locale("pl", "PL");
     private static final Locale EN = Locale.ENGLISH;
-    private static final int TILE_BG = 0x80152146;
-    private static final int TILE_FOCUS_BG = 0xB0335D91;
     private static final int FOCUS_RING = 0xFF9FD5FF;
     /** Preferred dock order. Only apps that are actually installed ever reach the dock. */
     private static final String[] POPULAR_DOCK_PACKAGES = {"com.google.android.youtube.tv", "com.netflix.ninja",
             "com.canal.android.canal", "com.spotify.tv.android", "com.disney.disneyplus", "com.wbd.stream",
             "com.amazon.amazonvideo.livingroom", "com.tvp.vodtv.tv", "com.google.android.youtube.tvkids",
             "pl.cda.tv"};
-    private static final int DOCK_SIZE = 6;
-    private static final int DOCK_TILE_WIDTH = 226, DOCK_GAP = 40;
-    private static final int DOCK_SPAN = DOCK_SIZE * DOCK_TILE_WIDTH + (DOCK_SIZE - 1) * DOCK_GAP;
+    private static final int DOCK_SIZE = 8;
+    /** The "more apps" drawer keeps rectangular banners, eight per row like the dock. */
+    private static final int DRAWER_COLUMNS = 8, DRAWER_TILE_W = 160, DRAWER_TILE_H = 90;
     /** Launchable system entries that are not apps a person would pin to the dock. */
     private static final java.util.Set<String> HIDDEN_APP_PACKAGES = new HashSet<>(java.util.Arrays.asList(
             "org.droidtv.playtv", "org.droidtv.eum", "org.droidtv.channels", "org.droidtv.contentexplorer",
@@ -153,9 +147,14 @@ public final class DashboardActivity extends Activity {
         final View fallback;
         final String name, league;
         final int teamId;
+        /** A large faded crest behind a match card: shown whole, not as a 128 px badge. */
+        final boolean watermark;
         CrestSlot(ImageView image, View fallback, String name, String league, int teamId) {
+            this(image, fallback, name, league, teamId, false);
+        }
+        CrestSlot(ImageView image, View fallback, String name, String league, int teamId, boolean watermark) {
             this.image = image; this.fallback = fallback; this.name = name; this.league = league;
-            this.teamId = teamId;
+            this.teamId = teamId; this.watermark = watermark;
         }
     }
     private Typeface weatherTypeface;
@@ -196,7 +195,6 @@ public final class DashboardActivity extends Activity {
     private boolean setupShown;
     private PhotoUploadServer photoUploadServer;
     // Home Assistant lights (row above the app dock).
-    private static final int LIGHT_ROW_Y = 646, LIGHT_TILE_W = 220, LIGHT_TILE_H = 74, LIGHT_GAP = 28;
     private static final long LIGHT_POLL_MS = 5_000;
     private HomeAssistantSetupServer homeAssistantSetupServer;
     private String haUrl = "";
@@ -213,9 +211,11 @@ public final class DashboardActivity extends Activity {
         final ImageView bulb;
         final TextView name;
         final TextView state;
+        final View iconCircle;
         boolean focused;
-        LightTile(String id, FrameLayout card, ImageView bulb, TextView name, TextView state) {
+        LightTile(String id, FrameLayout card, ImageView bulb, TextView name, TextView state, View iconCircle) {
             this.id = id;
+            this.iconCircle = iconCircle;
             this.card = card;
             this.bulb = bulb;
             this.name = name;
@@ -297,6 +297,7 @@ public final class DashboardActivity extends Activity {
                 buildScreen();
                 return;
             }
+            refreshRocketCard();
             refreshWeather();
             refreshCalendar(clubOneCalendar);
             refreshCalendar(clubTwoCalendar);
@@ -352,6 +353,7 @@ public final class DashboardActivity extends Activity {
         restoreCalendar(clubOneCalendar, saved);
         restoreCalendar(clubTwoCalendar, saved);
         loadHomeAssistant(saved);
+        restoreLaunches(saved);
         buildScreen();
         if (!clubOneCalendar.configured()) handler.post(() -> {
             if (!isFinishing() && !setupShown) { firstRunSetup = true; showTeamSetup(); }
@@ -372,6 +374,7 @@ public final class DashboardActivity extends Activity {
         scheduleNextMatchBoundary();
         resetScreensaverTimer();
         pollLights.run();
+        pollRockets.run();
     }
 
     @Override protected void onPause() {
@@ -380,6 +383,7 @@ public final class DashboardActivity extends Activity {
         handler.removeCallbacks(updateTime);
         handler.removeCallbacks(updateMatchCards);
         handler.removeCallbacks(pollLights);
+        handler.removeCallbacks(pollRockets);
         handler.removeCallbacks(startScreensaver);
         hideScreensaver();
         super.onPause();
@@ -689,6 +693,8 @@ public final class DashboardActivity extends Activity {
         clubTwoCalendar.cardViews.clear();
         dockCards.clear();
         dockGlows.clear();
+        dockLabels.clear();
+        rocketCard = null;
         appDrawerOpen = false;
         lastDockFocus = null;
         night = isNight();
@@ -705,31 +711,23 @@ public final class DashboardActivity extends Activity {
         wallpaper.setScaleType(ImageView.ScaleType.CENTER_CROP);
         root.addView(wallpaper, new FrameLayout.LayoutParams(-1, -1));
 
-        View veil = new View(this);
-        veil.setBackgroundColor(night ? 0x330A1036 : 0x220A1036);
-        root.addView(veil, new FrameLayout.LayoutParams(-1, -1));
-
-        clock = text("", 144, Color.WHITE, false, 60, 26, 590, 161);
-        date = text("", 37, Color.WHITE, false, 62, 189, 610, 55);
-
-        renderSpotifyBar();
-        circleAction(R.drawable.ic_toolbar_television, tr("Oglądaj telewizję", "Watch TV"), 1338,
-                () -> launch("org.droidtv.playtv"));
-        circleAction(R.drawable.ic_toolbar_sources, tr("Źródła", "Inputs"), 1438, this::showSources);
-        circleAction(R.drawable.ic_toolbar_settings, tr("Ustawienia", "Settings"), 1538,
-                this::showPublicSettings);
-
-        boolean singleColumn = !clubTwoCalendar.configured();
-        renderWeatherCard(singleColumn ? SINGLE_COLUMN_X : 56);
-        if (!clubOneCalendar.configured()) renderSetupCard();
-        else if (singleColumn)
-            renderMatchCard(SINGLE_COLUMN_X, clubOneCalendar.club, clubOneCalendar.league, clubOneCalendar);
-        else {
-            renderMatchCard(585, clubOneCalendar.club, clubOneCalendar.league, clubOneCalendar);
-            renderMatchCard(1114, clubTwoCalendar.club, clubTwoCalendar.league, clubTwoCalendar);
+        // The design's own background is already darkened; photos keep the readability veil.
+        if (!"cosmos".equals(selectedWallpaper())) {
+            View veil = new View(this);
+            veil.setBackgroundColor(0x660A1036);
+            root.addView(veil, new FrameLayout.LayoutParams(-1, -1));
         }
 
-        renderLightRow(singleColumn);
+        renderDesignHeader();
+        renderSpotifyBar();
+        designCircleAction(R.drawable.ic_ds_tv, tr("Oglądaj telewizję", "Watch TV"), 1556,
+                () -> launch("org.droidtv.playtv"));
+        designCircleAction(R.drawable.ic_ds_input, tr("Źródła", "Inputs"), 1652, this::showSources);
+        designCircleAction(R.drawable.ic_ds_settings, tr("Ustawienia", "Settings"), 1748,
+                this::showPublicSettings);
+        renderDesignWeather(712, 64, 788, 208);
+        renderDesignEvents();
+        renderLightRow();
         buildAppDock();
         handler.removeCallbacks(updateTime);
         updateTime.run();
@@ -738,28 +736,707 @@ public final class DashboardActivity extends Activity {
         if (restoreDrawer) handler.post(() -> openAppDrawer(focusRow, focusColumn));
     }
 
-    private void colorCard(int x, int y, int w, int h) {
-        View card = new View(this);
-        card.setBackground(shape(panel, outline, 34));
-        place(card, x, y, w, h);
+    // ======================= Design 1.2: "Launcher TV — ciemny" =======================
+    // The home screen follows a 1920×1080 design. Design pixels are converted with DS
+    // into the launcher's own 1672×941 grid, so every number below matches the design file.
+    private static final float DS = W / 1920f;
+    private static final int D_INK = 0xFFF4F6FB;
+    private static final int D_ACCENT = 0xFF7FA8FF;
+    private static final int D_GLASS = 0x800E1630;
+    private static final int D_GLASS_BORDER = 0x1FFFFFFF;
+    private static final float D_LEFT = 96, D_CONTENT_W = 1728;
+    private static final float D_EVENTS_Y = 324, D_EVENTS_H = 320, D_EVENTS_GAP = 32;
+    private static final float D_LIGHTS_Y = 680, D_LIGHT_H = 96, D_LIGHT_GAP = 20;
+    private static final float D_DOCK_Y = 856, D_DOCK_ICON = 140, D_DOCK_GAP = 24;
+    private static final float D_AURA_PAD = 70;
+    private static final int MAX_LIGHTS = 6;
+    private final android.util.SparseArray<Typeface> manropeFaces = new android.util.SparseArray<>();
+    private final List<View> dockLabels = new ArrayList<>();
+
+    private static int inkAlpha(float alpha) {
+        return (Math.round(alpha * 255) << 24) | (D_INK & 0xFFFFFF);
     }
 
-    private void renderSetupCard() {
-        int x = SINGLE_COLUMN_X, y = SINGLE_MATCH_Y, w = 500, h = 286;
-        View glow = tileGlow(x, y, w, h, 34);
-        colorCard(x, y, w, h);
-        text(tr("Kalendarz meczów", "Match calendar"), 21, ink, false, x + 30, y + 25, 430, 38);
-        text(tr("Wybierz swój klub", "Choose your club"), 34, ink, true, x + 30, y + 95, 440, 52);
-        text(tr("Możesz dodać jeden lub dwa kluby z aktualnych lig.",
-                "Add one or two clubs from available leagues."), 19,
-                ink, false, x + 30, y + 166, 430, 70);
-        View action = new View(this);
-        action.setFocusable(true);
-        action.setClickable(true);
-        action.setContentDescription(tr("Wybierz klub do kalendarza meczów", "Choose a club for the match calendar"));
-        action.setOnFocusChangeListener((v, focused) -> showTileGlow(glow, focused));
-        action.setOnClickListener(v -> showTeamSetup());
-        place(action, x, y, w, h);
+    private static int withAlpha(int color, float alpha) {
+        return (Math.round(alpha * 255) << 24) | (color & 0xFFFFFF);
+    }
+
+    /** Design pixels (1920 wide) to screen pixels. */
+    private int pxD(float value) { return Math.round(value * DS * scale); }
+
+    private FrameLayout.LayoutParams paramsD(float x, float y, float w, float h) {
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(pxD(w), pxD(h));
+        lp.leftMargin = pxD(x);
+        lp.topMargin = pxD(y);
+        return lp;
+    }
+
+    private <T extends View> T placeD(T view, float x, float y, float w, float h) {
+        root.addView(view, paramsD(x, y, w, h));
+        return view;
+    }
+
+    private <T extends View> T addD(FrameLayout parent, T view, float x, float y, float w, float h) {
+        if (parent == null) return placeD(view, x, y, w, h);
+        parent.addView(view, paramsD(x, y, w, h));
+        return view;
+    }
+
+    /** Manrope (OFL, bundled) at a given weight; falls back to the system font. */
+    private Typeface manrope(int weight) {
+        Typeface face = manropeFaces.get(weight);
+        if (face != null) return face;
+        try {
+            face = new Typeface.Builder(getAssets(), "fonts/Manrope.ttf")
+                    .setFontVariationSettings("'wght' " + weight).setWeight(weight).build();
+        } catch (Exception e) { face = null; }
+        if (face == null) face = weight >= 600 ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT;
+        manropeFaces.put(weight, face);
+        return face;
+    }
+
+    private TextView dText(FrameLayout parent, CharSequence value, float size, int weight, int color,
+                           float x, float y, float w, float h) {
+        // Keep room for the font's full line (ascenders, descenders) around the same centre.
+        float minH = size * 1.38f;
+        if (h < minH) { y -= (minH - h) / 2f; h = minH; }
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextColor(color);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_PX, pxD(size));
+        view.setTypeface(manrope(weight));
+        view.setIncludeFontPadding(false);
+        view.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        view.setSingleLine(true);
+        view.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        return addD(parent, view, x, y, w, h);
+    }
+
+    private ImageView dIcon(FrameLayout parent, int drawable, int tint, float x, float y, float size) {
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(drawable);
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        if (tint != 0) icon.setColorFilter(tint);
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        return addD(parent, icon, x, y, size, size);
+    }
+
+    /** Width of a text in design pixels. */
+    private float measureD(TextView view, CharSequence value) {
+        return android.text.Layout.getDesiredWidth(value, view.getPaint()) / (DS * scale);
+    }
+
+    /** Glass fill; radius in design px, negative = circle. */
+    private GradientDrawable glass(float radius) {
+        GradientDrawable d = new GradientDrawable();
+        if (radius < 0) d.setShape(GradientDrawable.OVAL);
+        else d.setCornerRadius(pxD(radius));
+        d.setColor(D_GLASS);
+        d.setStroke(Math.max(1, pxD(1)), D_GLASS_BORDER);
+        return d;
+    }
+
+    /** Clips content to the card's shape without casting a shadow. */
+    private android.view.ViewOutlineProvider clipOutline(float radius) {
+        return new android.view.ViewOutlineProvider() {
+            @Override public void getOutline(View view, android.graphics.Outline outline) {
+                if (radius < 0) outline.setOval(0, 0, view.getWidth(), view.getHeight());
+                else outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), pxD(radius));
+                outline.setAlpha(0f);
+            }
+        };
+    }
+
+    private FrameLayout dCard(float x, float y, float w, float h, float radius) {
+        FrameLayout card = new FrameLayout(this);
+        card.setBackground(glass(radius));
+        card.setOutlineProvider(clipOutline(radius));
+        card.setClipToOutline(true);
+        return placeD(card, x, y, w, h);
+    }
+
+    /** Accent aura behind a card; invisible until the card has focus. */
+    private View dFocusAura(float x, float y, float w, float h, float radius) {
+        View aura = new View(this);
+        aura.setBackground(new FocusAura(radius));
+        aura.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        aura.setOutlineProvider(null);
+        aura.setAlpha(0f);
+        aura.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        return placeD(aura, x - D_AURA_PAD, y - D_AURA_PAD, w + 2 * D_AURA_PAD, h + 2 * D_AURA_PAD);
+    }
+
+    /** Makes a card focusable with the design's focus: scale 1.05, white ring, accent aura, sheen. */
+    private Sheen prepareDesignFocus(View card) {
+        card.setFocusable(true);
+        card.setFocusableInTouchMode(true);
+        card.setClickable(true);
+        Sheen sheen = new Sheen();
+        card.setForeground(sheen);
+        return sheen;
+    }
+
+    private void dFocusable(View card, View aura, java.util.function.Consumer<Boolean> extra) {
+        Sheen sheen = prepareDesignFocus(card);
+        card.setOnFocusChangeListener((v, focused) -> {
+            showDesignFocus(card, aura, sheen, focused);
+            if (extra != null) extra.accept(focused);
+        });
+    }
+
+    private void showDesignFocus(View card, View aura, Sheen sheen, boolean focused) {
+        float s = focused ? 1.05f : 1f;
+        android.view.animation.Interpolator ease =
+                new android.view.animation.PathInterpolator(0.2f, 0.8f, 0.2f, 1f);
+        card.animate().scaleX(s).scaleY(s).translationZ(focused ? pxD(8) : 0)
+                .setDuration(280).setInterpolator(ease).start();
+        if (aura != null) {
+            aura.setTranslationZ(focused ? pxD(7) : 0);
+            aura.animate().alpha(focused ? 1f : 0f).scaleX(s).scaleY(s)
+                    .setDuration(focused ? 240 : 160).setInterpolator(ease).start();
+        }
+        if (sheen != null) { if (focused) sheen.start(); else sheen.stop(); }
+    }
+
+    /** Outer focus decoration: accent glow, a 9 px accent halo and a 3 px white ring. */
+    private final class FocusAura extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float radius;
+        FocusAura(float radius) { this.radius = radius; }
+        @Override public void draw(Canvas canvas) {
+            android.graphics.Rect b = getBounds();
+            float pad = pxD(D_AURA_PAD);
+            RectF card = new RectF(b.left + pad, b.top + pad, b.right - pad, b.bottom - pad);
+            float r = radius < 0 ? card.height() / 2f : pxD(radius);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(withAlpha(D_ACCENT, 0.55f));
+            paint.setMaskFilter(new android.graphics.BlurMaskFilter(Math.max(1, pxD(34)),
+                    android.graphics.BlurMaskFilter.Blur.NORMAL));
+            RectF lowered = new RectF(card);
+            lowered.offset(0, pxD(18));
+            canvas.drawRoundRect(lowered, r, r, paint);
+            paint.setMaskFilter(null);
+            // Translucent cards must not pick the glow up through their glass.
+            paint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR));
+            canvas.drawRoundRect(card, r, r, paint);
+            paint.setXfermode(null);
+            paint.setStyle(Paint.Style.STROKE);
+            float ring = pxD(3), halo = pxD(6);
+            paint.setStrokeWidth(halo);
+            paint.setColor(withAlpha(D_ACCENT, 0.30f));
+            RectF haloRect = new RectF(card);
+            haloRect.inset(-(ring + halo / 2f), -(ring + halo / 2f));
+            canvas.drawRoundRect(haloRect, r + ring + halo / 2f, r + ring + halo / 2f, paint);
+            paint.setStrokeWidth(ring);
+            paint.setColor(0xD9FFFFFF);
+            RectF ringRect = new RectF(card);
+            ringRect.inset(-ring / 2f, -ring / 2f);
+            canvas.drawRoundRect(ringRect, r + ring / 2f, r + ring / 2f, paint);
+        }
+        @Override public void setAlpha(int alpha) { }
+        @Override public void setColorFilter(android.graphics.ColorFilter filter) { }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
+    /** A light band sweeping across the focused card every 2.6 s (design "sheen"). */
+    private static final class Sheen extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final android.view.animation.Interpolator ease =
+                new android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f);
+        private static final int[] COLORS = {0x00FFFFFF, 0x4DFFFFFF, 0x14FFFFFF, 0x00FFFFFF};
+        private static final float[] STOPS = {0f, 0.47f, 0.6f, 1f};
+        private android.animation.ValueAnimator animator;
+        private float phase;
+
+        void start() {
+            if (animator != null) return;
+            animator = android.animation.ValueAnimator.ofFloat(0f, 1f);
+            animator.setDuration(2600);
+            animator.setStartDelay(200);
+            animator.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            animator.setInterpolator(new android.view.animation.LinearInterpolator());
+            animator.addUpdateListener(a -> { phase = (float) a.getAnimatedValue(); invalidateSelf(); });
+            phase = 0f;
+            animator.start();
+        }
+
+        void stop() {
+            if (animator != null) animator.cancel();
+            animator = null;
+            invalidateSelf();
+        }
+
+        @Override public void draw(Canvas canvas) {
+            if (animator == null) return;
+            float t = phase / 0.55f;
+            if (t <= 0f || t >= 1f) return;
+            t = ease.getInterpolation(t);
+            android.graphics.Rect b = getBounds();
+            float w = b.width(), h = b.height();
+            if (w <= 0 || h <= 0) return;
+            float cx = b.left + (-0.5f + 2f * t) * w, cy = b.exactCenterY();
+            float half = Math.max(w, h) * 0.45f;
+            float dx = half * 0.906f, dy = half * 0.423f; // CSS 115deg
+            paint.setShader(new android.graphics.LinearGradient(cx - dx, cy - dy, cx + dx, cy + dy,
+                    COLORS, STOPS, android.graphics.Shader.TileMode.CLAMP));
+            canvas.drawRect(b, paint);
+        }
+        @Override public void setAlpha(int alpha) { }
+        @Override public void setColorFilter(android.graphics.ColorFilter filter) { }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
+    /** "odświeżono 21:44" today, "odświeżono 26.10 21:44" for older data. */
+    private String stampLabel(long updatedAt) {
+        if (updatedAt <= 0) return tr("oczekiwanie na dane", "waiting for data");
+        Calendar then = Calendar.getInstance();
+        then.setTimeInMillis(updatedAt);
+        Calendar now = Calendar.getInstance();
+        boolean today = then.get(Calendar.YEAR) == now.get(Calendar.YEAR)
+                && then.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR);
+        return tr("odświeżono ", "updated ") + new SimpleDateFormat(today ? "HH:mm" : "d.MM HH:mm",
+                displayLocale()).format(new Date(updatedAt));
+    }
+
+    /** Card header: icon, title and a right-aligned refresh stamp sharing one line. */
+    private void cardHeader(FrameLayout card, float w, int icon, String title, String stamp, float alpha) {
+        dIcon(card, icon, inkAlpha(alpha), 34, 33, 24);
+        TextView stampView = dText(card, stamp, 16, 500, inkAlpha(0.58f), 0, 30, 10, 30);
+        float stampW = Math.min(240, measureD(stampView, stamp) + 6);
+        stampView.setLayoutParams(paramsD(w - 34 - stampW, 30, stampW, 30));
+        stampView.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        TextView label = dText(card, title, 22, 600, inkAlpha(alpha), 70, 30,
+                Math.max(60, w - 70 - 34 - stampW - 14), 30);
+        label.setAutoSizeTextTypeUniformWithConfiguration(pxD(16), pxD(22), 1, TypedValue.COMPLEX_UNIT_PX);
+    }
+
+    /** Small rounded label at the card's bottom right ("WYJAZD", "U SIEBIE", "NA ŻYWO"). */
+    private void cardPill(FrameLayout card, float w, float h, String value, int fill, int border, int color) {
+        String upper = value.toUpperCase(displayLocale());
+        TextView pill = dText(card, upper, 16, 700, color, 0, 0, 10, 36);
+        pill.setLetterSpacing(0.09f);
+        pill.setGravity(Gravity.CENTER);
+        GradientDrawable background = new GradientDrawable();
+        background.setCornerRadius(pxD(18));
+        background.setColor(fill);
+        background.setStroke(Math.max(1, pxD(1)), border);
+        pill.setBackground(background);
+        float pillW = measureD(pill, upper) * 1.09f + 30;
+        pill.setLayoutParams(paramsD(w - 34 - pillW, h - 30 - 36, pillW, 36));
+    }
+
+    /** "Pt. 30.10 · za 4 dni" */
+    private String relativeDayLabel(long millis) {
+        String day = new SimpleDateFormat("EEE d.MM", displayLocale()).format(new Date(millis));
+        day = Character.toUpperCase(day.charAt(0)) + day.substring(1);
+        Calendar now = Calendar.getInstance();
+        Calendar then = Calendar.getInstance(); then.setTimeInMillis(millis);
+        now.set(Calendar.HOUR_OF_DAY, 12); now.set(Calendar.MINUTE, 0); now.set(Calendar.SECOND, 0);
+        then.set(Calendar.HOUR_OF_DAY, 12); then.set(Calendar.MINUTE, 0); then.set(Calendar.SECOND, 0);
+        int days = (int) Math.round((then.getTimeInMillis() - now.getTimeInMillis()) / 86_400_000.0);
+        return day + (days < 0 ? "" : days == 0 ? tr(" · dziś", " · today") : days == 1
+                ? tr(" · jutro", " · tomorrow") : tr(" · za ", " · in ") + days + tr(" dni", " days"));
+    }
+
+    // ---------- Header: clock, weather, system buttons ----------
+
+    private void renderDesignHeader() {
+        clock = dText(null, "", 168, 300, D_INK, 90, 60, 580, 160);
+        clock.setLetterSpacing(-6f / 168f);
+        date = dText(null, "", 34, 500, inkAlpha(0.74f), 102, 222, 570, 48);
+        date.setAutoSizeTextTypeUniformWithConfiguration(pxD(24), pxD(34), 1, TypedValue.COMPLEX_UNIT_PX);
+    }
+
+    private void designCircleAction(int icon, String description, float x, Runnable click) {
+        View aura = dFocusAura(x, 64, 76, 76, -1);
+        FrameLayout button = dCard(x, 64, 76, 76, -1);
+        dIcon(button, icon, D_INK, 23, 23, 30);
+        button.setContentDescription(description);
+        dFocusable(button, aura, null);
+        button.setOnClickListener(v -> click.run());
+    }
+
+    private void renderDesignWeather(float x, float y, float w, float h) {
+        View aura = dFocusAura(x, y, w, h, 32);
+        FrameLayout card = dCard(x, y, w, h, 32);
+        dIcon(card, R.drawable.ic_ds_pin, D_INK, 32, 27, 24);
+        String stamp = stampLabel(forecastUpdatedAt);
+        TextView stampView = dText(card, stamp, 16, 500, inkAlpha(0.58f), 0, 24, 10, 30);
+        float stampW = Math.min(260, measureD(stampView, stamp) + 6);
+        stampView.setLayoutParams(paramsD(w - 32 - stampW, 24, stampW, 30));
+        stampView.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        dText(card, cityName, 24, 700, D_INK, 66, 22, w - 66 - 32 - stampW - 16, 34);
+
+        String currentIcon = forecast == null ? "" : forecast.optString("current_icon", "");
+        ImageView now = new ImageView(this);
+        now.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        now.setImageBitmap(weatherIcons.bitmap(currentIcon, pxD(96)));
+        addD(card, now, 24, 80, 96, 96);
+        JSONObject current = currentWeather();
+        CharSequence tempLabel = current == null || !current.has("temperature") ? "—"
+                : temperatureLabel(current.optDouble("temperature", 0));
+        TextView temp = dText(card, tempLabel, 92, 600, D_INK, 128, 72, 176, 112);
+        temp.setLetterSpacing(-3f / 92f);
+        temp.setAutoSizeTextTypeUniformWithConfiguration(pxD(56), pxD(92), 2, TypedValue.COMPLEX_UNIT_PX);
+        View divider = new View(this);
+        divider.setBackgroundColor(0x1FFFFFFF);
+        addD(card, divider, 320, 80, 1, 104);
+
+        List<JSONObject> hours = hourlySamples(6);
+        float areaX = 340, areaW = w - 32 - areaX, colW = areaW / 6f;
+        SimpleDateFormat hourFormat = new SimpleDateFormat("HH:mm", displayLocale());
+        hourFormat.setTimeZone(forecastZone());
+        for (int i = 0; i < hours.size(); i++) {
+            JSONObject item = hours.get(i);
+            float hx = areaX + i * colW;
+            dText(card, hourFormat.format(new Date(item.optLong("time"))), 17, 600, inkAlpha(0.64f),
+                    hx, 76, colW, 24).setGravity(Gravity.CENTER);
+            ImageView icon = new ImageView(this);
+            icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            icon.setImageBitmap(weatherIcons.bitmap(item.optString("icon", ""), pxD(48)));
+            addD(card, icon, hx + (colW - 48) / 2f, 102, 48, 48);
+            dText(card, temperatureLabel(item.optDouble("temperature")), 21, 700, D_INK,
+                    hx, 152, colW, 30).setGravity(Gravity.CENTER);
+        }
+        if (hours.isEmpty()) dText(card, tr("Pobieranie prognozy godzinowej…", "Loading hourly forecast…"),
+                18, 600, inkAlpha(0.68f), areaX, 112, areaW, 40).setGravity(Gravity.CENTER);
+        card.setContentDescription(tr("Pogoda ", "Weather ") + cityName
+                + tr(". Otwórz szczegóły", ". Open details"));
+        dFocusable(card, aura, null);
+        card.setOnClickListener(v -> showWeatherDetails());
+    }
+
+    // ---------- Events row: one or two clubs and the rocket launch ----------
+
+    private void renderDesignEvents() {
+        List<CalendarFeed> clubs = new ArrayList<>();
+        if (clubOneCalendar.configured()) {
+            clubs.add(clubOneCalendar);
+            if (clubTwoCalendar.configured()) clubs.add(clubTwoCalendar);
+        }
+        int count = Math.max(1, clubs.size()) + 1;
+        float w = (D_CONTENT_W - (count - 1) * D_EVENTS_GAP) / count;
+        float x = D_LEFT;
+        if (clubs.isEmpty()) {
+            renderDesignSetupCard(x, w);
+            x += w + D_EVENTS_GAP;
+        }
+        for (CalendarFeed feed : clubs) {
+            renderMatchCard(x, w, feed);
+            x += w + D_EVENTS_GAP;
+        }
+        renderRocketCard(x, w);
+    }
+
+    private void renderDesignSetupCard(float x, float w) {
+        float y = D_EVENTS_Y, h = D_EVENTS_H;
+        View aura = dFocusAura(x, y, w, h, 32);
+        FrameLayout card = dCard(x, y, w, h, 32);
+        cardHeader(card, w, R.drawable.ic_ds_shield, tr("Kalendarz meczów", "Match calendar"), "", 0.8f);
+        dText(card, tr("Wybierz swój klub", "Choose your club"), 36, 800, D_INK, 34, 110, w - 68, 46);
+        TextView hint = dText(card, tr("Możesz dodać jeden lub dwa kluby z aktualnych lig.",
+                "Add one or two clubs from available leagues."), 20, 600, inkAlpha(0.68f), 34, 168, w - 68, 60);
+        hint.setSingleLine(false);
+        hint.setMaxLines(2);
+        hint.setGravity(Gravity.TOP);
+        card.setContentDescription(tr("Wybierz klub do kalendarza meczów", "Choose a club for the match calendar"));
+        dFocusable(card, aura, null);
+        card.setOnClickListener(v -> showTeamSetup());
+    }
+
+    // ---------- Rocket launch (Home Assistant: Rocket Launch Live, sensor.rocket_launch_1..5) ----------
+
+    private static final long ROCKET_POLL_MS = 2L * 60 * 1000;
+    private static final long ROCKET_IMAGE_RETRY_MS = 30L * 60 * 1000;
+    /** A launch stays on the card for an hour after its planned lift-off. */
+    private static final long ROCKET_VISIBLE_AFTER_MS = 60L * 60 * 1000;
+    private final List<HomeAssistantClient.Launch> launches = new ArrayList<>();
+    private long launchesUpdatedAt;
+    private boolean launchesLoading;
+    private String launchesError;
+    private FrameLayout rocketCard;
+    private float rocketCardW;
+    private Bitmap rocketImageOff, rocketImageOn;
+    private boolean rocketImagesLoading;
+    private long rocketImagesAttemptedAt;
+
+    private boolean haConnected() {
+        return !haUrl.isEmpty() && !haToken.isEmpty();
+    }
+
+    private final Runnable pollRockets = new Runnable() {
+        @Override public void run() {
+            handler.removeCallbacks(this);
+            if (!dashboardVisible || !haConnected()) return;
+            if (!launchesLoading && !screensaverActive) {
+                launchesLoading = true;
+                final String address = haUrl;
+                final HomeAssistantClient client = new HomeAssistantClient(haUrl, haToken);
+                new Thread(() -> {
+                    List<HomeAssistantClient.Launch> result = null;
+                    String error = null;
+                    try { result = client.launches(); }
+                    catch (HomeAssistantClient.AuthException e) { error = tr("token odrzucony", "token rejected"); }
+                    catch (IOException e) { error = tr("brak połączenia z HA", "no connection to HA"); }
+                    final List<HomeAssistantClient.Launch> found = result;
+                    final String failure = error;
+                    handler.post(() -> {
+                        launchesLoading = false;
+                        if (!address.equals(haUrl)) return;
+                        if (found != null) {
+                            launches.clear();
+                            launches.addAll(found);
+                            launchesUpdatedAt = System.currentTimeMillis();
+                            launchesError = null;
+                            saveLaunches();
+                        } else launchesError = failure;
+                        refreshRocketCard();
+                    });
+                }, "rocket-launches").start();
+            }
+            loadRocketImages();
+            handler.postDelayed(this, ROCKET_POLL_MS);
+        }
+    };
+
+    private void restoreLaunches(SharedPreferences saved) {
+        launches.clear();
+        launchesUpdatedAt = saved.getLong("rocket_updated", 0);
+        try {
+            JSONArray items = new JSONArray(saved.getString("rocket_json", "[]"));
+            for (int i = 0; i < items.length(); i++)
+                launches.add(new HomeAssistantClient.Launch(items.getJSONObject(i)));
+        } catch (Exception ignored) { launches.clear(); }
+    }
+
+    private void saveLaunches() {
+        JSONArray items = new JSONArray();
+        try { for (HomeAssistantClient.Launch launch : launches) items.put(launch.toJson()); }
+        catch (Exception ignored) { return; }
+        getPreferences(MODE_PRIVATE).edit().putString("rocket_json", items.toString())
+                .putLong("rocket_updated", launchesUpdatedAt).apply();
+    }
+
+    /** The next launch that has not lifted off more than an hour ago. */
+    private HomeAssistantClient.Launch currentLaunch() {
+        long now = System.currentTimeMillis();
+        for (HomeAssistantClient.Launch launch : launches)
+            if (launch.startsAt == 0 || launch.startsAt + ROCKET_VISIBLE_AFTER_MS > now) return launch;
+        return null;
+    }
+
+    /** The same pictures as the HA dashboard card: /local/rocket_off.jpg and rocket_on.jpg (20 min before lift-off). */
+    private void loadRocketImages() {
+        if (!haConnected() || rocketImagesLoading || rocketImageOff != null && rocketImageOn != null) return;
+        long now = System.currentTimeMillis();
+        if (now - rocketImagesAttemptedAt < ROCKET_IMAGE_RETRY_MS) return;
+        rocketImagesAttemptedAt = now;
+        rocketImagesLoading = true;
+        final HomeAssistantClient client = new HomeAssistantClient(haUrl, haToken);
+        final int target = Math.max(320, pxD(720));
+        new Thread(() -> {
+            Bitmap off = rocketImageOff != null ? rocketImageOff : decodeRocketImage(client, "/local/rocket_off.jpg", target);
+            Bitmap on = rocketImageOn != null ? rocketImageOn : decodeRocketImage(client, "/local/rocket_on.jpg", target);
+            handler.post(() -> {
+                rocketImagesLoading = false;
+                rocketImageOff = off;
+                rocketImageOn = on;
+                refreshRocketCard();
+            });
+        }, "rocket-images").start();
+    }
+
+    private static Bitmap decodeRocketImage(HomeAssistantClient client, String path, int targetWidth) {
+        try {
+            byte[] data = client.download(path);
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(data, 0, data.length, bounds);
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = 1;
+            while (bounds.outWidth / (options.inSampleSize * 2) >= targetWidth) options.inSampleSize *= 2;
+            return BitmapFactory.decodeByteArray(data, 0, data.length, options);
+        } catch (Exception e) { return null; }
+    }
+
+    private void renderRocketCard(float x, float w) {
+        View aura = dFocusAura(x, D_EVENTS_Y, w, D_EVENTS_H, 32);
+        rocketCard = dCard(x, D_EVENTS_Y, w, D_EVENTS_H, 32);
+        rocketCardW = w;
+        dFocusable(rocketCard, aura, null);
+        rocketCard.setOnClickListener(v -> {
+            if (!haConnected()) showHomeAssistantSetup();
+            else showRocketDetails();
+        });
+        fillRocketCard();
+        if (haConnected() && launchesUpdatedAt == 0 && !launchesLoading) handler.post(pollRockets);
+    }
+
+    private void refreshRocketCard() {
+        if (rocketCard != null && rocketCard.getParent() == root) fillRocketCard();
+    }
+
+    private void fillRocketCard() {
+        FrameLayout card = rocketCard;
+        float w = rocketCardW, h = D_EVENTS_H;
+        card.removeAllViews();
+        long now = System.currentTimeMillis();
+        HomeAssistantClient.Launch launch = haConnected() ? currentLaunch() : null;
+        boolean imminent = launch != null && launch.warning20m;
+        Bitmap picture = imminent && rocketImageOn != null ? rocketImageOn : rocketImageOff;
+        if (picture != null) {
+            ImageView photo = new ImageView(this);
+            photo.setImageBitmap(picture);
+            photo.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            addD(card, photo, 0, 0, w, h);
+            View side = new View(this);
+            side.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                    new int[]{0xF0050A18, 0xCC050A18, 0x40050A18}));
+            addD(card, side, 0, 0, w, h);
+            View bottom = new View(this);
+            bottom.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
+                    new int[]{0x8C050A18, 0x00050A18}));
+            addD(card, bottom, 0, h * 0.55f, w, h * 0.45f);
+        }
+        cardHeader(card, w, R.drawable.ic_ds_rocket, tr("Start rakiety", "Rocket launch"),
+                haConnected() ? stampLabel(launchesUpdatedAt) : "", 0.82f);
+        if (!haConnected()) {
+            dText(card, tr("Połącz Home Assistanta", "Connect Home Assistant"), 32, 800, D_INK, 34, 104, w - 68, 44);
+            TextView hint = dText(card, tr("Najbliższy start z czujnika Rocket Launch Live, tak jak na pulpicie HA.",
+                    "Next launch from the Rocket Launch Live sensor, as on the HA dashboard."),
+                    20, 600, inkAlpha(0.72f), 34, 160, w - 68, 60);
+            hint.setSingleLine(false);
+            hint.setMaxLines(2);
+            hint.setGravity(Gravity.TOP);
+            dText(card, tr("OK — konfiguracja z telefonu", "OK — set up from your phone"), 18, 600,
+                    inkAlpha(0.58f), 34, h - 30 - 26, w - 68, 26);
+            card.setContentDescription(tr("Start rakiety. Połącz Home Assistanta", "Rocket launch. Connect Home Assistant"));
+            return;
+        }
+        if (launch == null) {
+            String title = launchesUpdatedAt == 0 && launchesError == null
+                    ? tr("Pobieranie startów…", "Loading launches…")
+                    : tr("Brak zaplanowanych startów", "No launches scheduled");
+            TextView titleView = dText(card, title, 32, 800, D_INK, 34, 104, w - 68, 84);
+            titleView.setSingleLine(false);
+            titleView.setMaxLines(2);
+            titleView.setGravity(Gravity.TOP);
+            if (launchesError != null) dText(card, launchesError, 20, 600, inkAlpha(0.68f), 34, h - 30 - 28, w - 68, 28);
+            card.setContentDescription(tr("Start rakiety. ", "Rocket launch. ") + title);
+            return;
+        }
+        dText(card, launch.name, 36, 800, D_INK, 34, 84, w - 68, 46);
+        String vehicle = launch.vehicle + (launch.vehicle.isEmpty() || launch.provider.isEmpty() ? "" : " · ")
+                + launch.provider;
+        if (!vehicle.isEmpty()) {
+            dIcon(card, R.drawable.ic_ds_building, inkAlpha(0.8f), 34, 142, 20);
+            dText(card, vehicle, 20, 600, inkAlpha(0.8f), 64, 138, w - 64 - 34, 28);
+        }
+        String place = launch.pad + (launch.pad.isEmpty() || launch.location.isEmpty() ? "" : ", ") + launch.location;
+        if (!place.isEmpty()) {
+            dIcon(card, R.drawable.ic_ds_pin, inkAlpha(0.8f), 34, 176, 20);
+            dText(card, place, 20, 600, inkAlpha(0.8f), 64, 172, w - 64 - 34, 28);
+        }
+        String time = launch.startsAt > 0
+                ? new SimpleDateFormat("HH:mm", displayLocale()).format(new Date(launch.startsAt)) : "—:—";
+        TextView timeView = dText(card, time, 52, 700, D_INK, 34, 214, 220, 56);
+        timeView.setLetterSpacing(-1.5f / 52f);
+        String day = launch.startsAt > 0 ? relativeDayLabel(launch.startsAt)
+                : launch.dateLabel.isEmpty() ? tr("termin nieustalony", "date not fixed")
+                : tr("planowo ", "planned ") + launch.dateLabel;
+        dText(card, day, 20, 600, inkAlpha(0.68f), 34, 272, w - 68 - 150, 26);
+        long left = launch.startsAt - now;
+        if (imminent || launch.startsAt > 0 && left > -ROCKET_VISIBLE_AFTER_MS && left < 24L * 3600_000) {
+            String countdown = left <= 0 ? tr("start", "lift-off")
+                    : left < 3600_000 ? tr("za ", "in ") + Math.max(1, left / 60_000) + " min"
+                    : tr("za ", "in ") + Math.round(left / 3600_000.0) + tr(" godz.", " h");
+            if (imminent) cardPill(card, w, h, countdown, 0x40FFC861, 0x99FFC861, 0xFFFFD38A);
+            else cardPill(card, w, h, countdown, 0x14FFFFFF, 0x24FFFFFF, D_INK);
+        }
+        card.setContentDescription(tr("Start rakiety: ", "Rocket launch: ") + launch.name + ", " + vehicle
+                + ", " + time + ", " + day);
+    }
+
+    private void showRocketDetails() {
+        HomeAssistantClient.Launch launch = currentLaunch();
+        Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout content = popupContent();
+        popupTitle(content, launch == null ? tr("Start rakiety", "Rocket launch") : launch.name);
+        if (launch == null) {
+            popupDescription(content, launchesError != null ? launchesError
+                    : tr("Home Assistant nie podał najbliższego startu (sensor.rocket_launch_1).",
+                    "Home Assistant reported no upcoming launch (sensor.rocket_launch_1)."));
+        } else {
+            LinearLayout rows = new LinearLayout(this);
+            rows.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams rowsParams = new LinearLayout.LayoutParams(-1, -2);
+            rowsParams.setMargins(0, px(14), 0, px(6));
+            content.addView(rows, rowsParams);
+            rocketDetailRow(rows, tr("Dostawca", "Provider"), launch.provider);
+            rocketDetailRow(rows, tr("Pojazd", "Vehicle"), launch.vehicle);
+            rocketDetailRow(rows, tr("Wyrzutnia", "Launch pad"), launch.pad);
+            rocketDetailRow(rows, tr("Lokalizacja", "Location"), launch.location);
+            rocketDetailRow(rows, tr("Misje", "Missions"), launch.missions);
+            rocketDetailRow(rows, tr("Start", "Lift-off"), launch.startsAt > 0
+                    ? new SimpleDateFormat(english ? "EEEE, d MMMM, HH:mm" : "EEEE, d MMMM, HH:mm",
+                            displayLocale()).format(new Date(launch.startsAt))
+                    : launch.dateLabel);
+            if (!launch.description.isEmpty()) popupDescription(content, launch.description);
+            List<HomeAssistantClient.Launch> later = new ArrayList<>();
+            boolean afterCurrent = false;
+            for (HomeAssistantClient.Launch item : launches) {
+                if (afterCurrent) later.add(item);
+                if (item == launch) afterCurrent = true;
+            }
+            if (!later.isEmpty()) {
+                TextView heading = new TextView(this);
+                heading.setText(tr("Kolejne starty", "Next launches"));
+                heading.setTextColor(ink);
+                heading.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(21));
+                heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                content.addView(heading);
+                for (HomeAssistantClient.Launch item : later) {
+                    String when = item.startsAt > 0
+                            ? new SimpleDateFormat("d.MM HH:mm", displayLocale()).format(new Date(item.startsAt))
+                            : item.dateLabel;
+                    detailLine(content, when + "  ·  " + item.name
+                            + (item.provider.isEmpty() ? "" : " (" + item.provider + ")"), 18, false, muted);
+                }
+            }
+        }
+        TextView close = setupButton(tr("Zamknij", "Close"));
+        close.setGravity(Gravity.CENTER);
+        close.setOnClickListener(v -> dialog.dismiss());
+        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(px(150), px(54));
+        closeParams.gravity = Gravity.END;
+        closeParams.topMargin = px(16);
+        content.addView(close, closeParams);
+        dialog.setContentView(content);
+        dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        showDialogWithBlur(dialog);
+        dialog.getWindow().setLayout(px(860), -2);
+        close.requestFocus();
+    }
+
+    private void rocketDetailRow(LinearLayout rows, String label, String value) {
+        if (value == null || value.trim().isEmpty()) return;
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        TextView name = new TextView(this);
+        name.setText(label);
+        name.setTextColor(muted);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(19));
+        row.addView(name, new LinearLayout.LayoutParams(px(170), -2));
+        TextView text = new TextView(this);
+        text.setText(value);
+        text.setTextColor(ink);
+        text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(19));
+        text.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        row.addView(text, new LinearLayout.LayoutParams(0, -2, 1f));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.bottomMargin = px(8);
+        rows.addView(row, params);
     }
 
     private void showPublicSettings() {
@@ -1602,40 +2279,24 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         glow.animate().alpha(focused ? 1f : 0f).setDuration(170).start();
     }
 
-    private void refreshStamp(long updatedAt, int x, int y, int width) {
-        String label = updatedAt > 0
-                ? tr("odświeżono dane:\n", "updated:\n")
-                    + new SimpleDateFormat(english ? "dd MMM yyyy HH:mm" : "dd.MM.yyyy HH:mm",
-                            displayLocale()).format(new Date(updatedAt))
-                : tr("oczekiwanie na dane", "waiting for data");
-        TextView stamp = text(label, 13, muted, false, x, y, width, 43);
-        stamp.setGravity(Gravity.RIGHT | Gravity.TOP);
-        stamp.setSingleLine(false);
-        stamp.setMaxLines(2);
-        stamp.setEllipsize(null);
-    }
-
-
     private void renderSpotifyBar() {
-        spotifyBar = new FrameLayout(this);
-        spotifyBar.setBackground(shape(panel, outline, 24));
-        spotifyBar.setClipToOutline(true);
-        spotifyBar.setFocusable(true);
-        spotifyBar.setClickable(true);
+        // Now playing sits under the system buttons, in the header's free corner.
+        float x = 1556, y = 168, w = 268, h = 76;
+        View aura = dFocusAura(x, y, w, h, 38);
+        spotifyBar = dCard(x, y, w, h, 38);
         spotifyBar.setOnClickListener(v -> launch("com.spotify.tv.android"));
-        View glow = tileGlow(430, 45, 880, 76, 24);
-        spotifyBar.setOnFocusChangeListener((v, focused) -> showTileGlow(glow, focused));
+        dFocusable(spotifyBar, aura, null);
         spotifyCover = new ImageView(this);
         spotifyCover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        spotifyCover.setBackground(shape(0x221DB954, Color.TRANSPARENT, 12));
-        FrameLayout.LayoutParams cover = new FrameLayout.LayoutParams(px(60), px(60));
-        cover.leftMargin = px(8); cover.topMargin = px(8);
-        spotifyBar.addView(spotifyCover, cover);
-        spotifyTitle = new NowPlayingTicker(this, px(30), ink);
-        FrameLayout.LayoutParams title = new FrameLayout.LayoutParams(px(770), -1);
-        title.leftMargin = px(84);
-        spotifyBar.addView(spotifyTitle, title);
-        place(spotifyBar, 430, 45, 880, 76);
+        GradientDrawable coverShape = new GradientDrawable();
+        coverShape.setShape(GradientDrawable.OVAL);
+        coverShape.setColor(0x331DB954);
+        spotifyCover.setBackground(coverShape);
+        spotifyCover.setOutlineProvider(clipOutline(-1));
+        spotifyCover.setClipToOutline(true);
+        addD(spotifyBar, spotifyCover, 10, 10, 56, 56);
+        spotifyTitle = new NowPlayingTicker(this, pxD(20), D_INK);
+        addD(spotifyBar, spotifyTitle, 78, 0, w - 78 - 18, h);
         updateSpotifyBar();
     }
 
@@ -1661,25 +2322,6 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                     "Allow LinarTV notification access in system settings. Only the Spotify session is read; notifications are not stored."));
             openSettings("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS");
         });
-    }
-
-    private void circleAction(int icon, String description, int x, Runnable click) {
-        View glow = tileGlow(x, 45, 76, 76, 38);
-        FrameLayout button = new FrameLayout(this);
-        place(button, x, 45, 76, 76);
-        ImageView symbol = new ImageView(this);
-        symbol.setImageResource(icon);
-        symbol.setColorFilter(ink);
-        symbol.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        button.addView(symbol, new FrameLayout.LayoutParams(px(34), px(34), Gravity.CENTER));
-        button.setContentDescription(description);
-        button.setFocusable(true);
-        button.setClickable(true);
-        button.setBackground(shape(panel, outline, 38));
-        button.setOnFocusChangeListener((v, focused) -> {
-            showTileGlow(glow, focused);
-        });
-        button.setOnClickListener(v -> click.run());
     }
 
     private long matchVisibleUntil(IcsMatchParser.Match match) {
@@ -1730,21 +2372,22 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             handler.postDelayed(updateMatchCards, Math.max(1, next - now + 100));
     }
 
-    private void renderMatchCard(int x, String club, String league, CalendarFeed feed) {
+    private void renderMatchCard(float x, float w, CalendarFeed feed) {
         int firstChild = root.getChildCount();
-        renderMatchCardContent(x, club, league, feed);
+        renderMatchCardContent(x, w, feed);
         feed.cardViews.clear();
         for (int i = firstChild; i < root.getChildCount(); i++)
             feed.cardViews.add(root.getChildAt(i));
     }
 
-    private void replaceMatchCard(int x, String club, String league, CalendarFeed feed) {
+    private void replaceMatchCard(float x, float w, CalendarFeed feed) {
         int position = feed.cardViews.isEmpty() ? root.getChildCount()
                 : root.indexOfChild(feed.cardViews.get(0));
         for (List<CrestSlot> slots : crestSlots.values())
-            slots.removeIf(slot -> feed.cardViews.contains(slot.image));
+            slots.removeIf(slot -> feed.cardViews.contains(slot.image)
+                    || slot.image.getParent() instanceof View && feed.cardViews.contains((View) slot.image.getParent()));
         for (View view : feed.cardViews) root.removeView(view);
-        renderMatchCard(x, club, league, feed);
+        renderMatchCard(x, w, feed);
         for (View view : feed.cardViews) {
             root.removeView(view);
             root.addView(view, Math.min(position++, root.getChildCount()));
@@ -1752,11 +2395,10 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         if (feed.tileButton != null) feed.tileButton.requestFocus();
     }
 
-    private void renderMatchCardContent(int x, String club, String league, CalendarFeed feed) {
-        final int y = feed == clubOneCalendar && !clubTwoCalendar.configured()
-                ? SINGLE_MATCH_Y : DASHBOARD_CARD_Y;
-        final int w = 500;
-        final int h = 286;
+    /** Design match card: competition, both teams (the chosen club in bold), kick-off and home/away. */
+    private void renderMatchCardContent(float x, float w, CalendarFeed feed) {
+        final float y = D_EVENTS_Y, h = D_EVENTS_H;
+        final String club = feed.club;
         long now = System.currentTimeMillis();
         List<IcsMatchParser.Match> upcoming = upcomingMatches(feed, now);
         long first = upcoming.isEmpty() ? 0 : upcoming.get(0).startsAt;
@@ -1768,83 +2410,71 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         boolean live = matchIsLive(match, now);
         feed.renderedLive = live;
         boolean home = match != null && match.home.startsWith(club);
-        View glow = tileGlow(x, y, w, h, 34);
-        colorCard(x, y, w, h);
-        int color = ink;
-        if (match == null) {
-            TextView placeTag = text(tr("TERMINARZ", "FIXTURES"), 18, color, true, x + 28, y + 24, 115, 32);
-            placeTag.setGravity(Gravity.CENTER);
-            placeTag.setBackground(shape(0x55FFFFFF, Color.TRANSPARENT, 9));
-        } else {
-            ImageView placeIcon = new ImageView(this);
-            placeIcon.setImageResource(home ? R.drawable.ic_match_home : R.drawable.ic_match_away);
-            placeIcon.setColorFilter(color);
-            placeIcon.setContentDescription(home ? tr("Mecz u siebie", "Home match")
-                    : tr("Mecz na wyjeździe", "Away match"));
-            placeIcon.setBackground(shape(0x55FFFFFF, Color.TRANSPARENT, 9));
-            placeIcon.setPadding(px(7), px(4), px(7), px(4));
-            place(placeIcon, x + 28, y + 22, 42, 36);
+        View aura = dFocusAura(x, y, w, h, 32);
+        FrameLayout card = dCard(x, y, w, h, 32);
+
+        if (match != null) {
+            // The club's crest, large and faded, in the bottom-right corner (as in the design).
+            String crestName = home ? match.home : match.away;
+            int teamId = home ? match.homeTeamId : match.awayTeamId;
+            ImageView mark = new ImageView(this);
+            mark.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            mark.setAlpha(0.17f);
+            mark.setRotation(-8f);
+            android.graphics.ColorMatrix desaturate = new android.graphics.ColorMatrix();
+            desaturate.setSaturation(0.55f);
+            mark.setColorFilter(new android.graphics.ColorMatrixColorFilter(desaturate));
+            mark.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            addD(card, mark, w + 54 - 330, h + 64 - 330, 330, 330);
+            Bitmap crest = crests.get(crestName, teamId);
+            if (crest != null) mark.setImageBitmap(crest);
+            crestSlots.computeIfAbsent(feed.leagueSlug + "|" + crestName, k -> new ArrayList<>())
+                    .add(new CrestSlot(mark, new View(this), crestName, feed.leagueSlug, teamId, true));
         }
+
         String competition = match != null && !match.competition.isEmpty() ? match.competition
-                : match == null ? league : tr("Rozgrywki", "Competition");
-        String stage = match != null && !match.stage.isEmpty() ? " - " + match.stage
-                : match != null && match.round > 0 ? tr(" - Kolejka ", " - Round ") + match.round : "";
-        if (!stage.isEmpty()) {
-            TextView leagueLabel = text(competition + stage, 18, color, false,
-                    x + 84, y + 22, 240, 35);
-            leagueLabel.setAutoSizeTextTypeUniformWithConfiguration(
-                    px(15), px(18), 1, TypedValue.COMPLEX_UNIT_PX);
-        } else {
-            text(competition, 20, color, false, x + (match == null ? 155 : 84), y + 22,
-                    match == null ? 169 : 240, 35);
-        }
-        refreshStamp(feed.updatedAt, x + 330, y + 19, 144);
-        String title = match == null ? tr("Brak nadchodzących meczów", "No upcoming matches")
-                : shortName(match.home) + " – " + shortName(match.away);
-        TextView teams = text(title, 29, color, true, x + 29, y + 68, 405, 80);
-        teams.setSingleLine(false);
-        teams.setMaxLines(2);
-        teams.setGravity(Gravity.TOP);
+                : match == null ? feed.league : tr("Rozgrywki", "Competition");
+        String stage = match != null && !match.stage.isEmpty() ? " · " + match.stage
+                : match != null && match.round > 0 ? tr(" · Kolejka ", " · Round ") + match.round : "";
+        String lower = competition.toLowerCase(Locale.ROOT);
+        boolean cup = match != null && (!match.stage.isEmpty() || lower.contains("puchar") || lower.contains("cup"));
+        cardHeader(card, w, cup ? R.drawable.ic_ds_trophy : R.drawable.ic_ds_shield, competition + stage,
+                stampLabel(feed.updatedAt), 0.8f);
+
         if (match == null) {
-            text(feed.loading ? tr("Pobieranie terminarza…", "Loading fixtures…")
-                    : tr("Terminarz chwilowo niedostępny", "Fixtures temporarily unavailable"), 20, color, false,
-                    x + 29, y + 176, 445, 50);
-            return;
-        }
-        String crestLeague = feed.leagueSlug;
-        crestBadge(match.home, crestLeague, match.homeTeamId, x + 14, y + 145);
-        crestBadge(match.away, crestLeague, match.awayTeamId, x + 150, y + 145);
-        String time = match.hasTime ? new SimpleDateFormat("HH:mm", PL).format(new Date(match.startsAt)) : "—:—";
-        text(time, 61, color, true, x + 290, y + 163, 190, 75).setGravity(Gravity.CENTER);
-        if (live) {
-            View liveAura = new View(this);
-            liveAura.setBackground(new AppGlowDrawable(15, false, 0x90FF3556, 0xA5FF7186));
-            liveAura.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-            place(liveAura, x + 306, y + 220, 158, 74);
-            TextView liveBadge = text("LIVE", 20, 0xFFFFFFFF, true,
-                    x + 330, y + 242, 110, 30);
-            liveBadge.setGravity(Gravity.CENTER);
-            liveBadge.setBackground(shape(0xFFD8283F, 0xFFFF9AA6, 15));
+            TextView title = dText(card, tr("Brak nadchodzących meczów", "No upcoming matches"), 32, 800,
+                    D_INK, 34, 96, w - 68, 84);
+            title.setSingleLine(false);
+            title.setMaxLines(2);
+            title.setGravity(Gravity.TOP);
+            dText(card, feed.loading ? tr("Pobieranie terminarza…", "Loading fixtures…")
+                    : tr("Terminarz chwilowo niedostępny", "Fixtures temporarily unavailable"), 20, 600,
+                    inkAlpha(0.68f), 34, h - 30 - 28, w - 68, 28);
+            card.setContentDescription(club + ". " + tr("Brak nadchodzących meczów", "No upcoming matches"));
         } else {
-            text(matchDateLabel(match), 18, color, false,
-                    x + 260, y + 231, 250, 27).setGravity(Gravity.CENTER); // centred under the kick-off time
+            boolean clubAtHome = home;
+            dText(card, match.home, clubAtHome ? 36 : 30, clubAtHome ? 800 : 500,
+                    clubAtHome ? D_INK : inkAlpha(0.72f), 34, 88, w - 68, 42);
+            dText(card, match.away, clubAtHome ? 30 : 36, clubAtHome ? 500 : 800,
+                    clubAtHome ? inkAlpha(0.72f) : D_INK, 34, 134, w - 68, 44);
+            String time = match.hasTime ? new SimpleDateFormat("HH:mm", PL).format(new Date(match.startsAt)) : "—:—";
+            TextView timeView = dText(card, time, 64, 700, D_INK, 34, 196, 240, 66);
+            timeView.setLetterSpacing(-2f / 64f);
+            dText(card, matchDateLabel(match), 20, 600, inkAlpha(0.68f), 34, 266, w - 68 - 150, 26);
+            if (live) cardPill(card, w, h, tr("Na żywo", "Live"), 0xFFD8283F, 0xFFFF9AA6, 0xFFFFFFFF);
+            else cardPill(card, w, h, home ? tr("U siebie", "Home") : tr("Wyjazd", "Away"),
+                    0x14FFFFFF, 0x24FFFFFF, D_INK);
+            card.setContentDescription(match.home + " – " + match.away + ", " + time + ", "
+                    + matchDateLabel(match) + (upcoming.size() > 1
+                    ? tr(". OK — następny mecz", ". OK — next match") : ""));
         }
-        feed.tileButton = null;
-        if (upcoming.size() > 1) {
-            View tile = new View(this);
-            place(tile, x, y, w, h);
-            tile.setFocusable(true);
-            tile.setFocusableInTouchMode(true);
-            tile.setClickable(true);
-            tile.setOnFocusChangeListener((v, focused) -> showTileGlow(glow, focused));
-            tile.setContentDescription(feed.selected == 0 ? tr("Następny mecz ", "Next match ") + club
-                    : tr("Wróć do najbliższego meczu ", "Return to nearest match ") + club);
-            tile.setOnClickListener(v -> {
-                feed.selected = feed.selected == 0 ? 1 : 0;
-                replaceMatchCard(x, club, league, feed);
-            });
-            feed.tileButton = tile;
-        }
+        dFocusable(card, aura, null);
+        feed.tileButton = card;
+        card.setOnClickListener(v -> {
+            if (upcoming.size() < 2) return;
+            feed.selected = feed.selected == 0 ? 1 : 0;
+            replaceMatchCard(x, w, feed);
+        });
     }
 
     private String shortName(String name) {
@@ -1855,45 +2485,7 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
     }
 
     private String matchDateLabel(IcsMatchParser.Match match) {
-        String day = new SimpleDateFormat("EEE d.MM", displayLocale()).format(new Date(match.startsAt));
-        day = Character.toUpperCase(day.charAt(0)) + day.substring(1);
-        Calendar now = Calendar.getInstance();
-        Calendar then = Calendar.getInstance(); then.setTimeInMillis(match.startsAt);
-        now.set(Calendar.HOUR_OF_DAY, 12); now.set(Calendar.MINUTE, 0); now.set(Calendar.SECOND, 0);
-        then.set(Calendar.HOUR_OF_DAY, 12); then.set(Calendar.MINUTE, 0); then.set(Calendar.SECOND, 0);
-        int days = (int) Math.round((then.getTimeInMillis() - now.getTimeInMillis()) / 86_400_000.0);
-        return day + (days <= 0 ? tr(" · dziś", " · today") : days == 1
-                ? tr(" · jutro", " · tomorrow") : tr(" · za ", " · in ") + days
-                + tr(" dni", " days"));
-    }
-
-    private void crestBadge(String club, String league, int teamId, int x, int y) {
-        final int size = 128;
-        Bitmap bitmap = crests.get(club, teamId);
-        TextView fallback = text(clubInitials(club), 35,
-                night ? 0xFFF5F8FF : 0xFF183154, true, x + 8, y + 8, size - 16, size - 16);
-        fallback.setGravity(Gravity.CENTER);
-        GradientDrawable circle = new GradientDrawable();
-        circle.setShape(GradientDrawable.OVAL);
-        circle.setColor(night ? 0xE12B4268 : 0xE6E4ECF6);
-        circle.setStroke(Math.max(1, px(2)), night ? 0xFF8DBDFF : 0xFF6994CC);
-        fallback.setBackground(circle);
-        fallback.setContentDescription(club);
-        ImageView image = new ImageView(this);
-        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        if (bitmap != null) setCrestBitmap(image, bitmap);
-        image.setVisibility(bitmap == null ? View.INVISIBLE : View.VISIBLE);
-        fallback.setVisibility(bitmap == null ? View.VISIBLE : View.INVISIBLE);
-        place(image, x, y, size, size);
-        crestSlots.computeIfAbsent(league + "|" + club, k -> new ArrayList<>())
-                .add(new CrestSlot(image, fallback, club, league, teamId));
-    }
-
-    private String clubInitials(String club) {
-        String[] words = club.trim().split("\\s+");
-        if (words.length > 1)
-            return (words[0].substring(0, 1) + words[1].substring(0, 1)).toUpperCase(PL);
-        return club.substring(0, Math.min(2, club.length())).toUpperCase(PL);
+        return relativeDayLabel(match.startsAt);
     }
 
     private void updateCrestViews(String club) {
@@ -1901,7 +2493,8 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             if (!club.equals(slot.name)) continue;
             Bitmap bitmap = crests.get(slot.name, slot.teamId);
             if (bitmap == null) continue;
-            setCrestBitmap(slot.image, bitmap);
+            if (slot.watermark) slot.image.setImageBitmap(bitmap);
+            else setCrestBitmap(slot.image, bitmap);
             slot.image.setVisibility(View.VISIBLE);
             slot.fallback.setVisibility(View.INVISIBLE);
         }
@@ -1981,84 +2574,6 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         }
         if (!line.isEmpty()) lines.add(line.trim());
         return lines.size() <= maxLines ? lines : null;
-    }
-
-    private void renderWeatherCard(int x) {
-        final int y = clubTwoCalendar.configured() ? DASHBOARD_CARD_Y : SINGLE_WEATHER_Y;
-        final int w = 500, h = 286;
-        View glow = tileGlow(x, y, w, h, 34);
-        colorCard(x, y, w, h);
-        int weatherInk = ink;
-        String currentIcon = forecast == null ? "" : forecast.optString("current_icon", "");
-        ImageView weatherHeaderIcon = new ImageView(this);
-        weatherHeaderIcon.setImageResource(R.drawable.ic_weather_thermometer);
-        weatherHeaderIcon.setColorFilter(weatherInk);
-        weatherHeaderIcon.setBackground(shape(0x55FFFFFF, Color.TRANSPARENT, 9));
-        weatherHeaderIcon.setPadding(px(7), px(4), px(7), px(4));
-        place(weatherHeaderIcon, x + 28, y + 22, 42, 36);
-        text(tr("Pogoda", "Weather"), 20, weatherInk, false, x + 84, y + 22, 155, 35);
-        refreshStamp(forecastUpdatedAt, x + 242, y + 19, 233);
-        // Top row: icon, temperature and city share one vertical centre (y+104).
-        // The icon's drawn left edge lines up with the header icon (x+28).
-        android.graphics.Bitmap currentBitmap = weatherIcons.bitmap(currentIcon, px(100));
-        int iconLeftPx = px(x + 28) - MeteoconIcons.inkLeft(currentBitmap);
-        ImageView currentImage = new ImageView(this);
-        currentImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        currentImage.setImageBitmap(currentBitmap);
-        place(currentImage, x + 28, y + 54, 100, 100);
-        setLeftPx(currentImage, iconLeftPx, px(100));
-        JSONObject now = currentWeather();
-        // Without font padding a centred text's glyphs sit on the box's centre line (y+104),
-        // halfway between the header and the hourly row; with it the big digits sank too low.
-        // Equal visible gaps icon -> temperature -> city, measured on the drawn artwork and glyphs
-        // (a moon is narrower than a cloud, "1" has more empty space on its left than "2").
-        final int gapPx = px(18);
-        int iconInkRight = iconLeftPx + MeteoconIcons.inkRight(currentBitmap);
-        CharSequence tempLabel = now == null || !now.has("temperature") ? "—"
-                : temperatureLabel(now.optDouble("temperature", 0));
-        TextView current = text("", 76, weatherInk, true, x + 150, y + 54, 170, 100);
-        current.setIncludeFontPadding(false);
-        current.setText(tempLabel);
-        current.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        android.graphics.Rect ink = new android.graphics.Rect();
-        String firstGlyph = tempLabel.length() == 0 ? "0" : tempLabel.subSequence(0, 1).toString();
-        current.getPaint().getTextBounds(firstGlyph, 0, firstGlyph.length(), ink);
-        int tempLeftPx = iconInkRight + gapPx - ink.left;
-        int tempWidthPx = Math.round(android.text.Layout.getDesiredWidth(tempLabel, current.getPaint()));
-        setLeftPx(current, tempLeftPx, tempWidthPx + px(4));
-        int cityLeftPx = Math.min(tempLeftPx + tempWidthPx + gapPx, px(x + 340));
-        int cityWidthPx = px(x + 480) - cityLeftPx;
-        TextView city = text("", 28, weatherInk, true, x + 340, y + 59, 140, 90);
-        city.setIncludeFontPadding(false);
-        city.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        city.setSingleLine(false);
-        city.setMaxLines(2);
-        setLeftPx(city, cityLeftPx, cityWidthPx);
-        fitCityName(city, cityName, cityWidthPx);
-        List<JSONObject> hours = hourlySamples(6);
-        SimpleDateFormat hourFormat = new SimpleDateFormat("HH:mm", displayLocale());
-        hourFormat.setTimeZone(forecastZone());
-        for (int i = 0; i < hours.size(); i++) {
-            JSONObject item = hours.get(i);
-            int hourX = x + 16 + i * 79;
-            // Larger hourly icons and temperatures use the card's lower space.
-            text(hourFormat.format(new Date(item.optLong("time"))), 16, weatherInk, true,
-                    hourX, y + 150, 75, 23).setGravity(Gravity.CENTER);
-            placeForecastIcon(item.optString("icon", ""), hourX + 4, y + 172, 67, 62);
-            TextView temperature = text("", 23, weatherInk, true, hourX, y + 236, 75, 34);
-            temperature.setText(temperatureLabel(item.optDouble("temperature")));
-            temperature.setGravity(Gravity.CENTER);
-        }
-        if (hours.isEmpty()) text(tr("Pobieranie prognozy godzinowej…", "Loading hourly forecast…"), 18, weatherInk, false,
-                x + 24, y + 189, 455, 34).setGravity(Gravity.CENTER);
-        View openDetails = new View(this);
-        openDetails.setFocusable(true);
-        openDetails.setClickable(true);
-        openDetails.setContentDescription(tr("Pogoda ", "Weather ") + cityName
-                + tr(". Otwórz szczegóły", ". Open details"));
-        openDetails.setOnFocusChangeListener((view, focused) -> showTileGlow(glow, focused));
-        openDetails.setOnClickListener(view -> showWeatherDetails());
-        place(openDetails, x, y, w, h);
     }
 
     private List<JSONObject> hourlySamples(int limit) {
@@ -2489,13 +3004,16 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             dockPackages.clear();
             dockPackages.addAll(resolveDock());
         }
-        // Fewer than six tiles keep their size and spacing and sit centred under the cards.
+        // Eight round app logos in design columns; fewer apps keep their size and sit centred.
+        dockLabels.clear();
         int tiles = Math.max(1, dockPackages.size());
-        int firstX = 56 + (DOCK_SPAN - (tiles * DOCK_TILE_WIDTH + (tiles - 1) * DOCK_GAP)) / 2;
+        float columnW = (D_CONTENT_W - (DOCK_SIZE - 1) * D_DOCK_GAP) / DOCK_SIZE;
+        float span = tiles * columnW + (tiles - 1) * D_DOCK_GAP;
+        float firstX = D_LEFT + (D_CONTENT_W - span) / 2;
         for (int i = 0; i < dockPackages.size(); i++)
-            dockTile(appLabel(dockPackages.get(i)), dockPackages.get(i), firstX + i * (DOCK_TILE_WIDTH + DOCK_GAP));
+            dockTile(appLabel(dockPackages.get(i)), dockPackages.get(i), firstX + i * (columnW + D_DOCK_GAP), columnW);
         // With no installed apps at all, a single "+" tile leads to the editor instead of an empty dock.
-        if (dockPackages.isEmpty()) dockTile(tr("Dodaj aplikacje", "Add apps"), null, firstX);
+        if (dockPackages.isEmpty()) dockTile(tr("Dodaj aplikacje", "Add apps"), null, firstX, columnW);
         dockMoveHint = null;
         if (dockMoveIndex >= 0) handler.post(this::paintDockMove);
 
@@ -2530,68 +3048,62 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         extraAppRows.clear();
         drawerRowsLoaded = false;
 
-        View expandGlow = tileGlow(817, 894, 38, 38, 19);
+        float expandX = 960 - 18, expandY = 1040;
+        View expandAura = dFocusAura(expandX, expandY, 36, 36, -1);
         dockExpand = new ImageView(this);
-        dockExpand.setImageResource(R.drawable.ic_dock_expand);
+        dockExpand.setImageResource(R.drawable.ic_ds_chevron);
+        dockExpand.setColorFilter(inkAlpha(0.8f));
         dockExpand.setContentDescription(tr("Więcej aplikacji — strzałka w dół", "More apps — press down"));
-        dockExpand.setPadding(px(8), px(7), px(8), px(7));
-        dockExpand.setBackground(shape(TILE_BG, 0x66869BBE, 19));
-        dockExpand.setFocusable(true);
-        dockExpand.setClickable(true);
-        dockExpand.setOnFocusChangeListener((view, focused) -> showTileGlow(expandGlow, focused));
+        dockExpand.setPadding(pxD(8), pxD(8), pxD(8), pxD(8));
+        dockExpand.setBackground(glass(-1));
+        dockExpand.setOutlineProvider(clipOutline(-1));
+        dockExpand.setClipToOutline(true);
+        placeD(dockExpand, expandX, expandY, 36, 36);
+        dFocusable(dockExpand, expandAura, null);
         dockExpand.setOnClickListener(v -> openAppDrawer());
-        place(dockExpand, 817, 894, 38, 38);
     }
 
-    private void dockTile(String brand, String pkg, int x) {
-        View glow = new View(this);
-        glow.setBackground(new AppGlowDrawable());
-        glow.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-        glow.setAlpha(0f);
-        place(glow, x - 24, 743, DOCK_TILE_WIDTH + 48, 164);
-        dockGlows.add(glow);
+    /** Round dock tile showing the app's own logo (its launcher icon), with the name underneath. */
+    private void dockTile(String brand, String pkg, float columnX, float columnW) {
+        float x = columnX + (columnW - D_DOCK_ICON) / 2;
+        View aura = dFocusAura(x, D_DOCK_Y, D_DOCK_ICON, D_DOCK_ICON, -1);
+        dockGlows.add(aura);
         FrameLayout card = new FrameLayout(this);
-        place(card, x, 765, DOCK_TILE_WIDTH, 120);
-        dockCards.add(card);
-        card.setFocusable(true);
-        card.setFocusableInTouchMode(true);
-        card.setClickable(true);
-        card.setContentDescription(brand);
-        card.setBackground(shape(TILE_BG, Color.TRANSPARENT, 32));
+        GradientDrawable base = new GradientDrawable();
+        base.setShape(GradientDrawable.OVAL);
+        base.setColor(0xFF161A2A);
+        base.setStroke(Math.max(1, pxD(1)), 0x29FFFFFF);
+        card.setBackground(base);
+        card.setOutlineProvider(clipOutline(-1));
         card.setClipToOutline(true);
-        Drawable artwork = null;
-        if (pkg != null) {
-            try {
-                artwork = getPackageManager().getApplicationBanner(pkg);
-                if (artwork == null) artwork = getPackageManager().getApplicationIcon(pkg);
-            } catch (PackageManager.NameNotFoundException ignored) { }
-        }
-        boolean bannerArtwork = false;
-        if (pkg != null) {
-            try { bannerArtwork = getPackageManager().getApplicationBanner(pkg) != null; }
-            catch (PackageManager.NameNotFoundException ignored) { }
-        }
-        if (artwork != null) {
+        placeD(card, x, D_DOCK_Y, D_DOCK_ICON, D_DOCK_ICON);
+        dockCards.add(card);
+        card.setContentDescription(brand);
+        Bitmap logo = pkg == null ? null : appLogo(pkg, pxD(D_DOCK_ICON));
+        if (logo != null) {
             ImageView icon = new ImageView(this);
-            icon.setImageDrawable(artwork);
-            // Phone apps have only a square icon; keep it whole instead of cropping it.
-            icon.setScaleType(bannerArtwork ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_CENTER);
-            if (!bannerArtwork) icon.setPadding(px(20), px(14), px(20), px(14));
-            icon.setAlpha(0.93f);
-            FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(-1, -1);
-            card.addView(icon, iconParams);
+            icon.setImageBitmap(logo);
+            icon.setScaleType(ImageView.ScaleType.FIT_XY);
+            card.addView(icon, new FrameLayout.LayoutParams(-1, -1));
         } else {
-            TextView label = new TextView(this);
-            label.setText(pkg == null ? "+  " + brand : brand);
-            label.setTextColor(Color.WHITE);
-            label.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(24));
-            label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-            label.setGravity(Gravity.CENTER);
-            card.addView(label, new FrameLayout.LayoutParams(-1, -1));
+            TextView plus = new TextView(this);
+            plus.setText(pkg == null ? "+" : brand.substring(0, Math.min(2, brand.length())));
+            plus.setTextColor(D_INK);
+            plus.setTextSize(TypedValue.COMPLEX_UNIT_PX, pxD(pkg == null ? 56 : 40));
+            plus.setTypeface(manrope(700));
+            plus.setGravity(Gravity.CENTER);
+            card.addView(plus, new FrameLayout.LayoutParams(-1, -1));
         }
+        TextView label = dText(null, brand, 19, 600, inkAlpha(0.74f), columnX - 8, D_DOCK_Y + D_DOCK_ICON + 14,
+                columnW + 16, 28);
+        label.setGravity(Gravity.CENTER);
+        label.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        dockLabels.add(label);
+        Sheen sheen = prepareDesignFocus(card);
         card.setOnFocusChangeListener((view, focused) -> {
             if (focused) lastDockFocus = card;
-            if (dockMoveIndex < 0) setAppTileFocus(card, glow, focused);
+            if (dockMoveIndex < 0) showDesignFocus(card, aura, sheen, focused);
+            label.setTextColor(focused ? D_INK : inkAlpha(0.74f));
         });
         card.setOnClickListener(view -> {
             if (pkg == null) showDockEditor(false); else launch(pkg);
@@ -2603,6 +3115,77 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                 return true;
             });
         }
+    }
+
+    /**
+     * The app's own logo as a round bitmap. Adaptive icons are drawn full-bleed so their safe zone
+     * fills the circle; legacy icons are cropped to their visible shape, logos without a backdrop
+     * are kept whole on the dark disc.
+     */
+    private Bitmap appLogo(String pkg, int size) {
+        String key = "app:" + pkg + ":" + size;
+        Bitmap cached = logoCache.get(key);
+        if (cached != null && !cached.isRecycled()) return cached;
+        PackageManager manager = getPackageManager();
+        Drawable icon = null;
+        try {
+            android.content.pm.ApplicationInfo info = manager.getApplicationInfo(pkg, 0);
+            if (info.icon != 0) {
+                try {
+                    icon = manager.getResourcesForApplication(info)
+                            .getDrawableForDensity(info.icon, DisplayMetrics.DENSITY_XXXHIGH, null);
+                } catch (Exception ignored) { icon = null; }
+            }
+            if (icon == null) icon = manager.getApplicationIcon(info);
+        } catch (PackageManager.NameNotFoundException e) { return null; }
+        if (icon == null || size <= 0) return null;
+        Bitmap result = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(result);
+        if (icon instanceof android.graphics.drawable.AdaptiveIconDrawable) {
+            android.graphics.drawable.AdaptiveIconDrawable adaptive = (android.graphics.drawable.AdaptiveIconDrawable) icon;
+            int bleed = Math.round(size * 0.25f); // 108 dp layers, 72 dp visible
+            Drawable back = adaptive.getBackground(), front = adaptive.getForeground();
+            if (back != null) { back.setBounds(-bleed, -bleed, size + bleed, size + bleed); back.draw(canvas); }
+            if (front != null) { front.setBounds(-bleed, -bleed, size + bleed, size + bleed); front.draw(canvas); }
+        } else {
+            int source = Math.max(size, 192);
+            Bitmap raw = Bitmap.createBitmap(source, source, Bitmap.Config.ARGB_8888);
+            icon.setBounds(0, 0, source, source);
+            icon.draw(new Canvas(raw));
+            int[] pixels = new int[source * source];
+            raw.getPixels(pixels, 0, source, 0, 0, source, source);
+            int left = source, top = source, right = -1, bottom = -1, opaque = 0;
+            for (int yy = 0; yy < source; yy++) for (int xx = 0; xx < source; xx++) {
+                if ((pixels[yy * source + xx] >>> 24) < 24) continue;
+                opaque++;
+                if (xx < left) left = xx;
+                if (xx > right) right = xx;
+                if (yy < top) top = yy;
+                if (yy > bottom) bottom = yy;
+            }
+            Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+            if (right < left) { raw.recycle(); return null; }
+            int boxW = right - left + 1, boxH = bottom - top + 1;
+            float fill = opaque / (float) (boxW * boxH);
+            if (fill >= 0.72f) {
+                // A shape icon (square, squircle, circle): its visible shape fills the disc.
+                int side = Math.max(boxW, boxH);
+                int cx = (left + right) / 2, cy = (top + bottom) / 2;
+                android.graphics.Rect from = new android.graphics.Rect(cx - side / 2, cy - side / 2,
+                        cx - side / 2 + side, cy - side / 2 + side);
+                canvas.drawBitmap(raw, from, new RectF(0, 0, size, size), paint);
+            } else {
+                // A bare logo mark: keep it whole inside the circle.
+                float inner = size * 0.64f;
+                float ratio = inner / Math.max(boxW, boxH);
+                float dw = boxW * ratio, dh = boxH * ratio;
+                canvas.drawBitmap(raw, new android.graphics.Rect(left, top, right + 1, bottom + 1),
+                        new RectF((size - dw) / 2f, (size - dh) / 2f, (size + dw) / 2f, (size + dh) / 2f), paint);
+            }
+            raw.recycle();
+        }
+        logoCache.put(key, result);
+        return result;
     }
 
     /** TV apps plus apps the person installed themselves, preferred apps first. */
@@ -2744,6 +3327,7 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         java.util.Collections.swap(dockPackages, from, to);
         swapDockViews(dockCards, from, to);
         swapDockViews(dockGlows, from, to);
+        if (dockLabels.size() == dockCards.size()) swapDockViews(dockLabels, from, to);
         dockMoveIndex = to;
         paintDockMove();
     }
@@ -2965,13 +3549,14 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             glow.setBackground(new AppGlowDrawable());
             glow.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
             glow.setAlpha(0f);
-            FrameLayout.LayoutParams glowParams = new FrameLayout.LayoutParams(px(DOCK_TILE_WIDTH + 48), px(164));
+            FrameLayout.LayoutParams glowParams = new FrameLayout.LayoutParams(px(DRAWER_TILE_W + 48), px(DRAWER_TILE_H + 44));
             glowParams.leftMargin = -px(4);
             glowParams.topMargin = -px(11);
+            glow.setBackground(new AppGlowDrawable(22, false));
             wrapper.addView(glow, glowParams);
             FrameLayout tile = new FrameLayout(this);
             tile.setBackground(shape(night ? 0xFF263451 : 0xFFE3EAF2,
-                    Color.TRANSPARENT, 32));
+                    Color.TRANSPARENT, 22));
             tile.setClipToOutline(true);
             tile.setContentDescription(brand);
             tile.setFocusable(true);
@@ -3002,12 +3587,12 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                 tile.addView(label, new FrameLayout.LayoutParams(-1, -1));
             }
             tile.setOnClickListener(v -> launch(pkg));
-            FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(px(DOCK_TILE_WIDTH), px(120));
+            FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(px(DRAWER_TILE_W), px(DRAWER_TILE_H));
             cardParams.leftMargin = px(20);
             cardParams.topMargin = px(11);
             wrapper.addView(tile, cardParams);
-            LinearLayout.LayoutParams itemParams = new LinearLayout.LayoutParams(px(DOCK_TILE_WIDTH + 40), px(APP_ROW_HEIGHT));
-            if (i < brands.length - 1) itemParams.rightMargin = px(DOCK_GAP - 40);
+            LinearLayout.LayoutParams itemParams = new LinearLayout.LayoutParams(px(DRAWER_TILE_W + 40), px(APP_ROW_HEIGHT));
+            if (i < brands.length - 1) itemParams.rightMargin = 0;
             row.addView(wrapper, itemParams);
             base.add(tile);
         }
@@ -3044,8 +3629,8 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         for (int i = 0; i < ordered.size(); i++) {
             ResolveInfo info = ordered.get(i);
             String pkg = info.activityInfo.packageName;
-            int drawerRow = 1 + i / DOCK_SIZE, drawerColumn = i % DOCK_SIZE;
-            if (i % DOCK_SIZE == 0) {
+            int drawerRow = 1 + i / DRAWER_COLUMNS, drawerColumn = i % DRAWER_COLUMNS;
+            if (i % DRAWER_COLUMNS == 0) {
                 row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setClipChildren(false);
@@ -3059,9 +3644,10 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             glow.setBackground(new AppGlowDrawable());
             glow.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
             glow.setAlpha(0f);
-            FrameLayout.LayoutParams glowParams = new FrameLayout.LayoutParams(px(DOCK_TILE_WIDTH + 48), px(164));
+            FrameLayout.LayoutParams glowParams = new FrameLayout.LayoutParams(px(DRAWER_TILE_W + 48), px(DRAWER_TILE_H + 44));
             glowParams.leftMargin = -px(4);
             glowParams.topMargin = -px(11);
+            glow.setBackground(new AppGlowDrawable(22, false));
             wrapper.addView(glow, glowParams);
             FrameLayout tile = new FrameLayout(this);
             tile.setFocusable(true);
@@ -3070,7 +3656,7 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
             tile.setClipToOutline(true);
             tile.setContentDescription(info.loadLabel(getPackageManager()));
             tile.setBackground(shape(night ? 0xFF263451 : 0xFFE3EAF2,
-                    Color.TRANSPARENT, 32));
+                    Color.TRANSPARENT, 22));
             tile.setOnFocusChangeListener((v, focused) -> {
                 setAppTileFocus(tile, glow, focused);
                 if (focused) { drawerFocusRow = drawerRow; drawerFocusColumn = drawerColumn; }
@@ -3092,14 +3678,14 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                 start.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
                 startActivity(start);
             });
-            FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(px(DOCK_TILE_WIDTH), px(120));
+            FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(px(DRAWER_TILE_W), px(DRAWER_TILE_H));
             cardParams.leftMargin = px(20);
             cardParams.topMargin = px(11);
             wrapper.addView(tile, cardParams);
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(px(DOCK_TILE_WIDTH + 40), px(APP_ROW_HEIGHT));
-            if (i % DOCK_SIZE != DOCK_SIZE - 1) params.rightMargin = px(DOCK_GAP - 40);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(px(DRAWER_TILE_W + 40), px(APP_ROW_HEIGHT));
+            if (i % DRAWER_COLUMNS != DRAWER_COLUMNS - 1) params.rightMargin = 0;
             row.addView(wrapper, params);
-            extraAppRows.get(1 + i / DOCK_SIZE).add(tile);
+            extraAppRows.get(1 + i / DRAWER_COLUMNS).add(tile);
             if (firstExtraApp == null) firstExtraApp = tile;
         }
         if (firstExtraApp == null) {
@@ -3133,10 +3719,12 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         capture.scale(width / (float) root.getWidth(), height / (float) root.getHeight());
         for (View card : dockCards) card.setVisibility(View.INVISIBLE);
         for (View glow : dockGlows) glow.setVisibility(View.INVISIBLE);
+        for (View label : dockLabels) label.setVisibility(View.INVISIBLE);
         dockExpand.setVisibility(View.INVISIBLE);
         root.draw(capture);
         for (View card : dockCards) card.setVisibility(View.VISIBLE);
         for (View glow : dockGlows) glow.setVisibility(View.VISIBLE);
+        for (View label : dockLabels) label.setVisibility(View.VISIBLE);
         dockExpand.setVisibility(View.VISIBLE);
         blurBackdrop(drawerBlurBitmap, 2, 1);
         drawerBlurImage.setImageBitmap(drawerBlurBitmap);
@@ -3404,24 +3992,34 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
 
     private void showSavedWallpaper(ImageView image) {
         String choice = selectedWallpaper();
-        if ("aurora".equals(choice)) image.setImageResource(R.drawable.aurora_wallpaper);
+        if ("cosmos".equals(choice)) image.setImageResource(R.drawable.cosmos_wallpaper);
+        else if ("aurora".equals(choice)) image.setImageResource(R.drawable.aurora_wallpaper);
         else if (choice.startsWith("folder:")) {
             File file = new File(wallpaperFolder(), choice.substring("folder:".length()));
             if (file.getParentFile().equals(wallpaperFolder()) && showWallpaperFile(image, file)) return;
-            image.setImageResource(R.drawable.sunset_wallpaper);
+            image.setImageResource(R.drawable.cosmos_wallpaper);
         }
         else if ("custom".equals(choice)) {
             File file = new File(getFilesDir(), "custom-wallpaper.img");
             if (showWallpaperFile(image, file)) return;
-            image.setImageResource(R.drawable.sunset_wallpaper);
-        } else image.setImageResource(R.drawable.sunset_wallpaper);
+            image.setImageResource(R.drawable.cosmos_wallpaper);
+        } else if ("sunset".equals(choice)) image.setImageResource(R.drawable.sunset_wallpaper);
+        else image.setImageResource(R.drawable.cosmos_wallpaper);
     }
 
     private String selectedWallpaper() {
-        String choice = getPreferences(MODE_PRIVATE).getString("wallpaper", "sunset");
+        SharedPreferences saved = getPreferences(MODE_PRIVATE);
+        // 1.2.0: the dark "cosmos" background of the new design replaces the old default once.
+        if (!saved.getBoolean("design2_wallpaper", false)) {
+            String old = saved.getString("wallpaper", "sunset");
+            SharedPreferences.Editor editor = saved.edit().putBoolean("design2_wallpaper", true);
+            if ("sunset".equals(old) || "dussehra".equals(old)) editor.putString("wallpaper", "cosmos");
+            editor.apply();
+        }
+        String choice = saved.getString("wallpaper", "cosmos");
         if ("dussehra".equals(choice)) {
-            getPreferences(MODE_PRIVATE).edit().putString("wallpaper", "sunset").apply();
-            return "sunset";
+            saved.edit().putString("wallpaper", "cosmos").apply();
+            return "cosmos";
         }
         return choice;
     }
@@ -3602,83 +4200,51 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         }
     }
 
-    private void renderLightRow(boolean singleColumn) {
+    private void renderLightRow() {
         lightTiles.clear();
-        // In single-column mode the right side holds the stacked cards, so the row stays on the left.
-        int span = singleColumn ? SINGLE_COLUMN_X - 56 - 64 : DOCK_SPAN;
+        float tileW = (D_CONTENT_W - (MAX_LIGHTS - 1) * D_LIGHT_GAP) / MAX_LIGHTS;
         if (!haConfigured()) {
-            int width = 360;
-            lightSetupTile(56 + (span - width) / 2, width);
+            float w = tileW * 2 + D_LIGHT_GAP;
+            lightSetupTile(D_LEFT + (D_CONTENT_W - w) / 2, w);
             return;
         }
-        int fit = Math.max(1, (span + LIGHT_GAP) / (LIGHT_TILE_W + LIGHT_GAP));
-        int count = Math.min(fit, haEntities.size());
-        int total = count * LIGHT_TILE_W + (count - 1) * LIGHT_GAP;
-        int firstX = 56 + (span - total) / 2;
-        for (int i = 0; i < count; i++) lightTile(haEntities.get(i), firstX + i * (LIGHT_TILE_W + LIGHT_GAP));
+        int count = Math.min(MAX_LIGHTS, haEntities.size());
+        float total = count * tileW + (count - 1) * D_LIGHT_GAP;
+        float firstX = D_LEFT + (D_CONTENT_W - total) / 2;
+        for (int i = 0; i < count; i++) lightTile(haEntities.get(i), firstX + i * (tileW + D_LIGHT_GAP), tileW);
     }
 
-    private void lightSetupTile(int x, int width) {
-        View glow = tileGlow(x, LIGHT_ROW_Y, width, LIGHT_TILE_H, 24);
-        TextView card = new TextView(this);
-        card.setText("+  " + tr("Światła z Home Assistanta", "Home Assistant lights"));
-        card.setTextColor(Color.WHITE);
-        card.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(19));
-        card.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        card.setGravity(Gravity.CENTER);
-        card.setSingleLine(true);
-        card.setFocusable(true);
-        card.setFocusableInTouchMode(true);
-        card.setClickable(true);
-        card.setBackground(shape(TILE_BG, 0x66869BBE, 24));
-        card.setOnFocusChangeListener((v, focused) -> {
-            showTileGlow(glow, focused);
-            card.setBackground(shape(focused ? TILE_FOCUS_BG : TILE_BG,
-                    focused ? FOCUS_RING : 0x66869BBE, 24, focused ? 3 : 1));
-        });
+    private void lightSetupTile(float x, float w) {
+        View aura = dFocusAura(x, D_LIGHTS_Y, w, D_LIGHT_H, 48);
+        FrameLayout card = dCard(x, D_LIGHTS_Y, w, D_LIGHT_H, 48);
+        View circle = new View(this);
+        GradientDrawable circleShape = new GradientDrawable();
+        circleShape.setShape(GradientDrawable.OVAL);
+        circleShape.setColor(0x12FFFFFF);
+        circle.setBackground(circleShape);
+        addD(card, circle, 18, 19, 58, 58);
+        dIcon(card, R.drawable.ic_ds_bulb_off, inkAlpha(0.8f), 33, 34, 28);
+        dText(card, "+  " + tr("Światła z Home Assistanta", "Home Assistant lights"), 22, 700, D_INK,
+                92, 18, w - 92 - 26, 32);
+        dText(card, tr("Połącz i wybierz do 6 świateł z telefonu", "Connect and pick up to 6 lights on your phone"),
+                17, 600, inkAlpha(0.62f), 92, 52, w - 92 - 26, 24);
+        card.setContentDescription(tr("Światła z Home Assistanta. Skonfiguruj", "Home Assistant lights. Set up"));
+        dFocusable(card, aura, null);
         card.setOnClickListener(v -> showHomeAssistantSetup());
-        place(card, x, LIGHT_ROW_Y, width, LIGHT_TILE_H);
     }
 
-    private void lightTile(String id, int x) {
-        View glow = tileGlow(x, LIGHT_ROW_Y, LIGHT_TILE_W, LIGHT_TILE_H, 24);
-        FrameLayout card = new FrameLayout(this);
-        card.setFocusable(true);
-        card.setFocusableInTouchMode(true);
-        card.setClickable(true);
-        ImageView bulb = new ImageView(this);
-        bulb.setImageResource(R.drawable.ic_light_bulb);
-        FrameLayout.LayoutParams bulbParams = new FrameLayout.LayoutParams(px(34), px(34),
-                Gravity.CENTER_VERTICAL | Gravity.START);
-        bulbParams.leftMargin = px(18);
-        card.addView(bulb, bulbParams);
-        TextView name = new TextView(this);
-        name.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(19));
-        name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        name.setSingleLine(true);
-        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        FrameLayout.LayoutParams nameParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
-        nameParams.leftMargin = px(64);
-        nameParams.rightMargin = px(14);
-        nameParams.topMargin = px(11);
-        card.addView(name, nameParams);
-        TextView state = new TextView(this);
-        state.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(15));
-        state.setSingleLine(true);
-        state.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        FrameLayout.LayoutParams stateParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
-        stateParams.leftMargin = px(64);
-        stateParams.rightMargin = px(14);
-        stateParams.topMargin = px(40);
-        card.addView(state, stateParams);
-        place(card, x, LIGHT_ROW_Y, LIGHT_TILE_W, LIGHT_TILE_H);
-        LightTile tile = new LightTile(id, card, bulb, name, state);
+    /** Pill-shaped light switch: bulb in a circle, name and state; amber when on. */
+    private void lightTile(String id, float x, float w) {
+        View aura = dFocusAura(x, D_LIGHTS_Y, w, D_LIGHT_H, 48);
+        FrameLayout card = dCard(x, D_LIGHTS_Y, w, D_LIGHT_H, 48);
+        View circle = new View(this);
+        addD(card, circle, 18, 19, 58, 58);
+        ImageView bulb = dIcon(card, R.drawable.ic_ds_bulb_off, 0, 33, 34, 28);
+        TextView name = dText(card, "", 22, 700, D_INK, 92, 18, w - 92 - 22, 32);
+        TextView state = dText(card, "", 17, 600, inkAlpha(0.62f), 92, 52, w - 92 - 22, 24);
+        LightTile tile = new LightTile(id, card, bulb, name, state, circle);
         lightTiles.put(id, tile);
-        card.setOnFocusChangeListener((v, focused) -> {
-            tile.focused = focused;
-            showTileGlow(glow, focused);
-            paintLightTile(tile);
-        });
+        dFocusable(card, aura, focused -> tile.focused = focused);
         card.setOnClickListener(v -> toggleLight(tile));
         paintLightTile(tile);
     }
@@ -3692,13 +4258,23 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         boolean known = entity != null && haError == null;
         boolean available = known && entity.available();
         boolean on = available && entity.on();
-        int fill = on ? 0xF0FFD27A : TILE_BG;
-        int textColor = on ? 0xFF15223E : Color.WHITE;
-        tile.card.setBackground(shape(on && tile.focused ? 0xFFFFE2A6 : tile.focused && !on ? TILE_FOCUS_BG : fill,
-                tile.focused ? FOCUS_RING : Color.TRANSPARENT, 24, tile.focused ? 3 : 1));
-        tile.bulb.setColorFilter(textColor);
-        tile.name.setTextColor(textColor);
-        tile.state.setTextColor(on ? 0xCC15223E : 0xCCFFFFFF);
+        if (on) {
+            GradientDrawable amber = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                    new int[]{0x47FFBE64, 0x1FFF9646});
+            amber.setCornerRadius(pxD(48));
+            amber.setStroke(Math.max(1, pxD(1)), 0x73FFCD82);
+            GradientDrawable base = glass(48);
+            base.setStroke(0, 0);
+            tile.card.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{base, amber}));
+        } else tile.card.setBackground(glass(48));
+        GradientDrawable circle = new GradientDrawable();
+        circle.setShape(GradientDrawable.OVAL);
+        circle.setColor(on ? 0x38FFC86E : 0x12FFFFFF);
+        tile.iconCircle.setBackground(circle);
+        tile.bulb.setImageResource(on ? R.drawable.ic_ds_bulb_on : R.drawable.ic_ds_bulb_off);
+        if (on) tile.bulb.clearColorFilter();
+        else tile.bulb.setColorFilter(inkAlpha(0.8f));
+        tile.state.setTextColor(on ? 0xFFFFD38A : inkAlpha(0.62f));
         String label = entity != null ? entity.name
                 : tile.id.substring(tile.id.indexOf('.') + 1).replace('_', ' ');
         String status = haError != null ? haError
@@ -3757,6 +4333,12 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                         haStates.clear();
                         haError = null;
                         haGeneration++;
+                        launches.clear();
+                        launchesUpdatedAt = 0;
+                        launchesError = null;
+                        rocketImageOff = null;
+                        rocketImageOn = null;
+                        rocketImagesAttemptedAt = 0;
                         getPreferences(MODE_PRIVATE).edit()
                                 .putString("ha_url", url)
                                 .putString("ha_token", token)
@@ -3990,6 +4572,8 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
         deleteParams.topMargin = px(22);
         deleteWrap.addView(delete, deleteParams);
         String selected = selectedWallpaper();
+        addWallpaperThumbnail(row, dialog, "cosmos", R.drawable.cosmos_wallpaper, null, selected,
+                deleteWrap, delete, deleteTarget, deleteKey);
         addWallpaperThumbnail(row, dialog, "sunset", R.drawable.sunset_wallpaper, null, selected,
                 deleteWrap, delete, deleteTarget, deleteKey);
         addWallpaperThumbnail(row, dialog, "aurora", R.drawable.aurora_wallpaper, null, selected,
@@ -4178,8 +4762,8 @@ second.setOnClickListener(v -> chooseLeague(1, draft, second, dialog, status));
                 if (!(target.getParentFile().equals(folder) || target.equals(legacy))
                         || !target.isFile() || !target.delete())
                     throw new IOException("Nie udało się usunąć zdjęcia");
-                if (key.equals(getPreferences(MODE_PRIVATE).getString("wallpaper", "sunset")))
-                    getPreferences(MODE_PRIVATE).edit().putString("wallpaper", "sunset").apply();
+                if (key.equals(getPreferences(MODE_PRIVATE).getString("wallpaper", "cosmos")))
+                    getPreferences(MODE_PRIVATE).edit().putString("wallpaper", "cosmos").apply();
                 confirmation.dismiss();
                 gallery.dismiss();
                 applyVisualSettingsNow();

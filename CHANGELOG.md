@@ -3,6 +3,26 @@
 Każde wydanie ma tu wpis po polsku i po angielsku. Najnowsze na górze.
 Every release gets an entry here in Polish and English. Newest first.
 
+## 1.2.0 — nowy wygląd / new look
+
+**Polski**
+
+Nowe
+- **Nowy, ciemny wygląd ekranu głównego** według projektu „Launcher TV — ciemny”: duży zegar, pogoda z prognozą godzinową w nagłówku, szklane karty, font Manrope, tło „kosmos” (domyślne; inne tapety nadal w galerii).
+- **Fokus pod pilota**: powiększenie 1,05, biała obwódka, niebieska poświata i przesuwający się połysk.
+- **Dock: 8 okrągłych ikon z oryginalnymi logami aplikacji** (ikona aplikacji z systemu) i nazwą pod spodem. Szuflada „więcej aplikacji” ma 8 kafelków w rzędzie.
+- **Karta „Start rakiety”** z Home Assistanta — ta sama funkcja co na pulpicie HA: najbliższy start z czujnika Rocket Launch Live (`sensor.rocket_launch_1`), rakieta, dostawca, wyrzutnia, godzina i odliczanie, tło `/local/rocket_off.jpg` / `rocket_on.jpg` (20 min przed startem). OK otwiera szczegóły i kolejne starty.
+- Światła z HA jako „pigułki” z żarówką; włączone świecą na bursztynowo.
+
+**English**
+
+New
+- **New dark home screen** following the "Launcher TV — dark" design: large clock, weather with hourly forecast in the header, glass cards, Manrope font, "cosmos" background (default; other wallpapers remain in the gallery).
+- **Remote-friendly focus**: 1.05 scale, white ring, blue glow and a moving sheen.
+- **Dock: 8 round tiles with the apps' original logos** (the app's own icon) and the name below. The "more apps" drawer shows 8 tiles per row.
+- **"Rocket launch" card** from Home Assistant — the same feature as on the HA dashboard: next launch from the Rocket Launch Live sensor (`sensor.rocket_launch_1`), rocket, provider, pad, time and countdown, background `/local/rocket_off.jpg` / `rocket_on.jpg` (20 min before lift-off). OK opens details and the next launches.
+- HA lights as pills with a bulb; lights that are on glow amber.
+
 ## 1.1.0 — fork kiclaw / kiclaw fork
 
 **Polski**

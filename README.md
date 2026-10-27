@@ -65,6 +65,8 @@ Signed releases: see [docs/RELEASING.md](docs/RELEASING.md). What changed in eac
 - Weather data: [Open-Meteo.com](https://open-meteo.com/) (CC BY 4.0); city search: Open-Meteo geocoding / GeoNames (CC BY 4.0).
 - Weather icons: [Meteocons](https://github.com/basmilius/weather-icons) by Bas Milius (MIT), bundled in the app.
 - Weather Icons font by Erik Flowers (SIL OFL 1.1) — used for the °C / °F sign.
+- [Manrope](https://github.com/googlefonts/manrope) font by The Manrope Project Authors (SIL OFL 1.1), bundled in `assets/fonts`.
+- Dock icons are the apps' own launcher icons, read from the system; no third-party logos are stored in the repository.
 - Club crests are loaded from kalendarzeligowe.pl and belong to their clubs — see [docs/CRESTS.md](docs/CRESTS.md).
 
 ### License
@@ -115,6 +117,8 @@ Podpisane wydania: [docs/RELEASING.md](docs/RELEASING.md). Zmiany w kolejnych we
 - Dane pogodowe: [Open-Meteo.com](https://open-meteo.com/) (CC BY 4.0); wyszukiwanie miast: geokodowanie Open-Meteo / GeoNames (CC BY 4.0).
 - Ikony pogody: [Meteocons](https://github.com/basmilius/weather-icons), Bas Milius (MIT), wbudowane w aplikację.
 - Font Weather Icons: Erik Flowers (SIL OFL 1.1) — znak °C / °F.
+- Font [Manrope](https://github.com/googlefonts/manrope): The Manrope Project Authors (SIL OFL 1.1), wbudowany w `assets/fonts`.
+- Ikony w docku to oryginalne ikony aplikacji odczytywane z systemu; w repozytorium nie ma cudzych logotypów.
 - Herby są pobierane z kalendarzeligowe.pl i należą do klubów — zobacz [docs/CRESTS.md](docs/CRESTS.md).
 
 ### Licencja
