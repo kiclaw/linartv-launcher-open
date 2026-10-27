@@ -715,12 +715,13 @@ public final class DashboardActivity extends Activity {
 
         // The design's own background is already darkened; photos keep the readability veil.
         glassHosts.clear();
-        View veil = null;
-        if (!"cosmos".equals(selectedWallpaper())) {
-            veil = new View(this);
-            veil.setBackgroundColor(0x660A1036);
+        int veilColor = "cosmos".equals(selectedWallpaper()) ? 0 : 0x660A1036;
+        if (veilColor != 0) {
+            View veil = new View(this);
+            veil.setBackgroundColor(veilColor);
             root.addView(veil, new FrameLayout.LayoutParams(-1, -1));
         }
+        prepareBackdropBlur(wallpaper.getDrawable(), veilColor);
 
         renderDesignHeader();
         renderSpotifyBar();
@@ -734,7 +735,6 @@ public final class DashboardActivity extends Activity {
         renderDesignEvents();
         renderLightRow();
         buildAppDock();
-        prepareBackdropBlur(wallpaper, veil, 0);
         handler.removeCallbacks(updateTime);
         updateTime.run();
         scheduleNextMatchBoundary();
@@ -866,37 +866,52 @@ public final class DashboardActivity extends Activity {
     // The wallpaper is static, so one heavily blurred, slightly saturated copy of it is made per
     // build; every glass card paints its own piece of that copy under the tint ("backdrop-filter").
 
-    private static final int BACKDROP_SCALE = 6;
+    /** About blur(18px) at 1920 px: strong, but the wallpaper's shapes still show through. */
+    private static final int BACKDROP_SCALE = 4, BACKDROP_RADIUS = 4;
     private Bitmap backdropBlur;
+    private int backdropScreenW = 1, backdropScreenH = 1;
     private final List<View> glassHosts = new ArrayList<>();
     private static final android.graphics.ColorMatrixColorFilter BACKDROP_SATURATE;
     static {
         android.graphics.ColorMatrix saturate = new android.graphics.ColorMatrix();
-        saturate.setSaturation(1.5f);
+        saturate.setSaturation(1.3f);
         BACKDROP_SATURATE = new android.graphics.ColorMatrixColorFilter(saturate);
     }
 
-    private void prepareBackdropBlur(View wallpaper, View veil, int attempt) {
-        handler.postDelayed(() -> {
-            if (wallpaper.getParent() != root) return;
-            int w = root.getWidth(), h = root.getHeight();
-            if (w <= 0 || h <= 0 || wallpaper.getWidth() <= 0) {
-                if (attempt < 20) prepareBackdropBlur(wallpaper, veil, attempt + 1);
-                return;
-            }
-            Bitmap small = Bitmap.createBitmap(Math.max(1, w / BACKDROP_SCALE), Math.max(1, h / BACKDROP_SCALE),
-                    Bitmap.Config.ARGB_8888);
-            Canvas canvas = new Canvas(small);
-            canvas.scale(small.getWidth() / (float) w, small.getHeight() / (float) h);
+    /**
+     * Built synchronously, before any card is drawn, from the wallpaper drawable itself
+     * (centre-cropped to the screen like the ImageView), so every card has its blur on the
+     * very first frame and never falls back to plain transparency.
+     */
+    private void prepareBackdropBlur(Drawable wallpaper, int veilColor) {
+        android.graphics.Point size = new android.graphics.Point();
+        getWindowManager().getDefaultDisplay().getRealSize(size);
+        int w = Math.max(1, size.x), h = Math.max(1, size.y);
+        backdropScreenW = w;
+        backdropScreenH = h;
+        if (wallpaper == null) { backdropBlur = null; return; }
+        int bw = Math.max(1, w / BACKDROP_SCALE), bh = Math.max(1, h / BACKDROP_SCALE);
+        Bitmap small = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(small);
+        canvas.drawColor(0xFF0B1F3B);
+        int iw = wallpaper.getIntrinsicWidth(), ih = wallpaper.getIntrinsicHeight();
+        if (iw > 0 && ih > 0) {
+            float crop = Math.max(bw / (float) iw, bh / (float) ih);
+            int dw = Math.round(iw * crop), dh = Math.round(ih * crop);
+            int left = (bw - dw) / 2, top = (bh - dh) / 2;
+            android.graphics.Rect old = new android.graphics.Rect(wallpaper.getBounds());
+            wallpaper.setBounds(left, top, left + dw, top + dh);
             wallpaper.draw(canvas);
-            if (veil != null) veil.draw(canvas);
-            blurBackdrop(small, 6, 3);
-            backdropBlur = small;
-            for (View host : glassHosts) {
-                host.invalidate();
-                if (host.getBackground() != null) host.getBackground().invalidateSelf();
-            }
-        }, attempt == 0 ? 0 : 100);
+            wallpaper.setBounds(old);
+        } else {
+            android.graphics.Rect old = new android.graphics.Rect(wallpaper.getBounds());
+            wallpaper.setBounds(0, 0, bw, bh);
+            wallpaper.draw(canvas);
+            wallpaper.setBounds(old);
+        }
+        if (veilColor != 0) canvas.drawColor(veilColor);
+        blurBackdrop(small, BACKDROP_RADIUS, 3);
+        backdropBlur = small;
     }
 
     /** Glass: the blurred wallpaper under the card, a translucent tint and a hairline border. */
@@ -916,10 +931,10 @@ public final class DashboardActivity extends Activity {
             float corner = radius < 0 ? Math.min(r.width(), r.height()) / 2f : pxD(radius);
             Bitmap blur = backdropBlur;
             paint.setStyle(Paint.Style.FILL);
-            if (blur != null && !blur.isRecycled() && root != null && root.getWidth() > 0) {
+            if (blur != null && !blur.isRecycled()) {
                 android.graphics.BitmapShader shader = new android.graphics.BitmapShader(blur,
                         android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP);
-                matrix.setScale(root.getWidth() / (float) blur.getWidth(), root.getHeight() / (float) blur.getHeight());
+                matrix.setScale(backdropScreenW / (float) blur.getWidth(), backdropScreenH / (float) blur.getHeight());
                 matrix.postTranslate(-host.getLeft(), -host.getTop());
                 shader.setLocalMatrix(matrix);
                 paint.setShader(shader);
@@ -963,8 +978,6 @@ public final class DashboardActivity extends Activity {
 
         void clipContent() {
             clipContent = true;
-            // Rendered once into a texture; redrawn only when the card changes.
-            setLayerType(View.LAYER_TYPE_HARDWARE, null);
         }
 
         @Override protected void dispatchDraw(Canvas canvas) {
@@ -1019,7 +1032,9 @@ public final class DashboardActivity extends Activity {
                 .setDuration(280).setInterpolator(ease).start();
         if (aura != null) {
             aura.setTranslationZ(focused ? pxD(7) : 0);
-            aura.animate().alpha(focused ? 1f : 0f).scaleX(s).scaleY(s)
+            // The aura is a software bitmap: scaling it on the GPU made its ring edges step,
+            // so it is drawn at the focused (1.05) size and only fades.
+            aura.animate().alpha(focused ? 1f : 0f)
                     .setDuration(focused ? 240 : 160).setInterpolator(ease).start();
         }
         if (sheen != null) { if (focused) sheen.start(); else sheen.stop(); }
@@ -1034,7 +1049,9 @@ public final class DashboardActivity extends Activity {
             android.graphics.Rect b = getBounds();
             float pad = pxD(D_AURA_PAD);
             RectF card = new RectF(b.left + pad, b.top + pad, b.right - pad, b.bottom - pad);
-            float r = radius < 0 ? card.height() / 2f : pxD(radius);
+            float growX = card.width() * 0.025f, growY = card.height() * 0.025f; // scale 1.05
+            card.inset(-growX, -growY);
+            float r = radius < 0 ? card.height() / 2f : pxD(radius) * 1.05f;
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(withAlpha(D_ACCENT, 0.55f));
             paint.setMaskFilter(new android.graphics.BlurMaskFilter(Math.max(1, pxD(34)),

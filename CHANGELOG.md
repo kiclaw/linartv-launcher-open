@@ -3,6 +3,22 @@
 Każde wydanie ma tu wpis po polsku i po angielsku. Najnowsze na górze.
 Every release gets an entry here in Polish and English. Newest first.
 
+## 1.3.2 — poprawki szkła / glass fixes
+
+**Polski**
+
+Poprawione
+- Rozmycie tła kart liczy się przed pierwszym rysowaniem, więc karty nie wracają do zwykłej przezroczystości (np. po zmianie fokusu).
+- Rozmycie jest mniejsze (ok. 18 px), żeby kształty tapety były widoczne zamiast jednolitego koloru.
+- Obwódka i poświata fokusu są rysowane od razu w powiększonym rozmiarze, bez skalowania obrazka — bez „schodków” na łukach.
+
+**English**
+
+Fixed
+- The cards' background blur is computed before the first draw, so cards no longer fall back to plain transparency (e.g. after a focus change).
+- Blur is lighter (about 18 px) so the wallpaper's shapes show instead of a flat colour.
+- The focus ring and glow are drawn at the focused size instead of scaling a bitmap — no steps on curves.
+
 ## 1.3.1 — gładkie krawędzie i rozmycie / smooth edges and blur
 
 **Polski**
