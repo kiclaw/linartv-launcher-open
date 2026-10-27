@@ -3,6 +3,22 @@
 Każde wydanie ma tu wpis po polsku i po angielsku. Najnowsze na górze.
 Every release gets an entry here in Polish and English. Newest first.
 
+## 1.3.1 — gładkie krawędzie i rozmycie / smooth edges and blur
+
+**Polski**
+
+Poprawione
+- Okrągłe ikony i zaokrąglone karty nie mają już „schodków” na łukach po najechaniu (wygładzone maski zamiast przycinania przez GPU).
+- Szklane przyciski i tła sekcji mają mocne rozmycie tła (jak `backdrop-filter: blur`), z lekkim podbiciem nasycenia.
+- Tło karty „Start rakiety” jest lekko przezroczyste.
+
+**English**
+
+Fixed
+- Round icons and rounded cards no longer show steps on their curves when focused (anti-aliased masks instead of GPU outline clipping).
+- Glass buttons and section backgrounds have a strong background blur (like `backdrop-filter: blur`) with a slight saturation boost.
+- The "Rocket launch" card background is slightly see-through.
+
 ## 1.3.0 — zdjęcia / photos
 
 **Polski**
